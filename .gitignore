@@ -1,0 +1,16 @@
+# 编译产物
+/hub/hub
+/games/uno/uno
+*.exe
+
+# 运行数据
+*.db
+*.db-wal
+*.db-shm
+host_ed25519
+host_ed25519.pub
+uno-prefs.json
+
+# 本地环境
+.env
+.DS_Store
