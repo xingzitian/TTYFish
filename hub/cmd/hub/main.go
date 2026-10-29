@@ -16,12 +16,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xingzitian/TTYFish/games/uno"
+	"github.com/xingzitian/TTYFish/games/uno/engine"
+	unoUI "github.com/xingzitian/TTYFish/games/uno/ui"
+	"github.com/xingzitian/TTYFish/hub/internal/registry"
 	"github.com/xingzitian/TTYFish/hub/internal/sshd"
 	"github.com/xingzitian/TTYFish/hub/internal/store"
 	"github.com/xingzitian/TTYFish/hub/internal/web"
 	"github.com/xingzitian/TTYFish/sdk/ui"
-	"github.com/xingzitian/TTYFish/games/uno"
-	"github.com/xingzitian/TTYFish/games/uno/engine"
 )
 
 func main() {
@@ -64,8 +66,16 @@ func main() {
 	srv, err := sshd.New(sshd.Config{
 		Addr:        *addr,
 		HostKeyPath: *hostKey,
-		Rules:       rules,
-		Game:        uno.New(rules),
+		Game: registry.Entry{
+			ID:   "uno",
+			Game: uno.New(rules),
+			NewUI: func(c registry.UIContext) registry.Model {
+				return unoUI.NewModel(unoUI.Identity{Key: c.Key, Name: c.Name}, c.Client, unoUI.Options{
+					Rules: rules, Mode: c.Mode, ModeOf: c.ModeOf, SetMode: c.SetMode,
+				}, unoUI.NewRenderer(c.Output, c.Term))
+			},
+		},
+		PrefsPath:   filepath.Join(filepath.Dir(*hostKey), "uno-prefs.json"),
 		Store:       st,
 		BotDelay:    *botDelay,
 		IdleTimeout: *idle,

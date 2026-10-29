@@ -20,30 +20,26 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 	bm "github.com/charmbracelet/wish/bubbletea"
 	"github.com/muesli/termenv"
 	gossh "golang.org/x/crypto/ssh"
 
+	"github.com/xingzitian/TTYFish/hub/internal/registry"
 	"github.com/xingzitian/TTYFish/hub/internal/room"
 	"github.com/xingzitian/TTYFish/hub/internal/session"
 	"github.com/xingzitian/TTYFish/hub/internal/store"
-	"github.com/xingzitian/TTYFish/sdk/game"
 	sdkui "github.com/xingzitian/TTYFish/sdk/ui"
-	"github.com/xingzitian/TTYFish/games/uno"
-	"github.com/xingzitian/TTYFish/games/uno/engine"
-	unoUI "github.com/xingzitian/TTYFish/games/uno/ui"
 )
 
 // Config 是起一个 SSH 游戏服需要的全部参数。
 type Config struct {
 	Addr        string
 	HostKeyPath string
-	Rules       engine.Rules
-	// Game 可以指定一个游戏实现（比如带 AI 的 UNO）；不填就按 Rules 造一个。
-	Game game.Game
+	Game        registry.Entry
+	// PrefsPath 可指定旧版偏好文件；为空时使用 host key 目录下的 prefs.json。
+	PrefsPath string
 	// Store 是账号库。为 nil 时 `auth` 命令不可用（纯游戏模式）。
 	Store       *store.Store
 	BotDelay    time.Duration
@@ -69,7 +65,7 @@ func EnsureHostKey(path string) error {
 	if err != nil {
 		return fmt.Errorf("生成 host key: %w", err)
 	}
-	block, err := gossh.MarshalPrivateKey(priv, "uno host key")
+	block, err := gossh.MarshalPrivateKey(priv, "TTYFish host key")
 	if err != nil {
 		return fmt.Errorf("编码 host key: %w", err)
 	}
@@ -96,15 +92,6 @@ func Fingerprint(k ssh.PublicKey) string {
 // 而不是靠改用户名。
 func Identity(k ssh.PublicKey) string {
 	return Fingerprint(k)
-}
-
-// sessionRenderer 为一条会话构造渲染器。
-func sessionRenderer(s ssh.Session) *lipgloss.Renderer {
-	term := ""
-	if pty, _, ok := s.Pty(); ok {
-		term = pty.Term
-	}
-	return unoUI.NewRenderer(s, term)
 }
 
 // isInteractive 判断这条会话是不是"人坐在终端前玩"。
@@ -134,6 +121,9 @@ var lastRegistry atomic.Pointer[room.Registry]
 
 // New 组装 SSH 服务。返回的 server 需要调用方自己 ListenAndServe。
 func New(cfg Config) (*ssh.Server, error) {
+	if err := cfg.Game.Validate(); err != nil {
+		return nil, err
+	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":2222"
 	}
@@ -145,11 +135,7 @@ func New(cfg Config) (*ssh.Server, error) {
 	}
 
 	// 房间表是进程级的：所有连接共享，房间码才能跨连接索引到同一局。
-	g := cfg.Game
-	if g == nil {
-		g = uno.New(cfg.Rules)
-	}
-	reg := room.NewRegistry(g, room.Options{BotLag: cfg.BotDelay})
+	reg := room.NewRegistry(cfg.Game.Game, room.Options{BotLag: cfg.BotDelay})
 	lastRegistry.Store(reg)
 	go func() {
 		t := time.NewTicker(time.Minute)
@@ -159,14 +145,17 @@ func New(cfg Config) (*ssh.Server, error) {
 		}
 	}()
 
-	// 个人偏好跟 host key 放一起（一般是 /var/lib/uno）。
-	pref := loadPrefs(filepath.Join(filepath.Dir(cfg.HostKeyPath), "uno-prefs.json"))
+	// 默认将个人偏好与 host key 放在同一目录。
+	if cfg.PrefsPath == "" {
+		cfg.PrefsPath = filepath.Join(filepath.Dir(cfg.HostKeyPath), "prefs.json")
+	}
+	pref := loadPrefs(cfg.PrefsPath)
 
 	return wish.NewServer(
 		wish.WithAddress(cfg.Addr),
 		wish.WithHostKeyPath(cfg.HostKeyPath),
 		wish.WithIdleTimeout(cfg.IdleTimeout),
-		wish.WithVersion("uno"),
+		wish.WithVersion("TTYFish"),
 
 		// 只认公钥：既是安全边界，也是"你是谁"的来源之一。
 		wish.WithPublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
@@ -224,12 +213,14 @@ func New(cfg Config) (*ssh.Server, error) {
 				conn := session.New(reg, fp, s.User())
 				conn.Resume() // 断线重连：这个身份还在房间里就直接回去
 
-				model := unoUI.NewModel(unoUI.Identity{Key: fp, Name: s.User()}, conn, unoUI.Options{
-					Rules:   cfg.Rules,
-					Mode:    cfg.Mode,
-					ModeOf:  pref.mode,
-					SetMode: pref.setMode,
-				}, sessionRenderer(s))
+				term := ""
+				if pty, _, ok := s.Pty(); ok {
+					term = pty.Term
+				}
+				model := cfg.Game.NewUI(registry.UIContext{
+					Key: fp, Name: s.User(), Client: conn, Output: s, Term: term,
+					Mode: cfg.Mode, ModeOf: pref.mode, SetMode: pref.setMode,
+				})
 
 				p := tea.NewProgram(model, append(bm.MakeOptions(s), tea.WithAltScreen())...)
 

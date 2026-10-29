@@ -22,7 +22,7 @@ docs/         需求、架构、游戏开发指南
 三个独立 Go 模块，依赖方向单向：`games/* → sdk ← hub`。
 
 **加一个游戏**只需要在 `games/` 下新建一个模块实现 `sdk/game.Game`，
-平台一行都不用改。见 [docs/GAME_SDK.md](docs/GAME_SDK.md)。
+再在 `hub/cmd/hub` 注册规则实例和 UI 工厂，平台内部无需改动。见 [docs/GAME_SDK.md](docs/GAME_SDK.md)。
 
 ---
 
@@ -49,6 +49,7 @@ ssh -p 2222 你的名字@127.0.0.1
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | 平台需求：账号、登录、大厅、社交、非功能指标 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 分层、数据流、部署拓扑、关键不变式 |
 | [docs/GAME_SDK.md](docs/GAME_SDK.md) | 怎么写一个游戏（给第三方作者） |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | 本次改动、本机测试和后续开发步骤 |
 
 ---
 
@@ -58,7 +59,7 @@ ssh -p 2222 你的名字@127.0.0.1
 |---|---|---|
 | M0 | 平台骨架：HTTP + SQLite + SSH 挑战登录 | ✅ |
 | M1 | 账号：自动建号、多公钥、网页可见 | ✅（删钥匙的界面还没做） |
-| M2 | 游戏挂载：`ssh hub` 进大厅选游戏 | 部分（现在直接进 uno） |
+| M2 | 游戏挂载：`ssh hub` 进大厅选游戏 | 部分（通用挂载已完成，仍直接进 uno） |
 | M3 | 战绩 | 未开始 |
 | M4 | 社交 | 未开始 |
 

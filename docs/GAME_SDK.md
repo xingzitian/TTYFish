@@ -207,3 +207,19 @@ func TestApplyIsDeterministic(t *testing.T) {
 （总牌数守恒、不能出非法牌、必须能结束）。
 
 平台的 `selfcheck.sh` 会跑这些。
+
+
+## 挂载到平台
+
+当前在 `hub/cmd/hub` 组装入口通过 `registry.Entry` 显式挂载游戏：
+
+- `ID`：稳定的游戏标识，例如 `uno`。
+- `Game`：实现 `sdk/game.Game` 的规则对象。
+- `NewUI`：接收 `registry.UIContext`，返回实现 `tea.Model` 和 `Close()` 的界面。
+
+`UIContext` 提供玩家身份、`client.Client`、输出流、TERM 和颜色偏好回调。
+游戏的 UI 包仍只依赖 SDK；入口中的适配闭包负责将这些参数传给游戏构造器。
+SSH 层负责断线重连，并在连接结束时调用界面的 `Close()`；该方法应允许重复调用。
+规则配置由入口同时传给规则对象和 UI，避免两者使用不同配置。
+
+当前只配置一个挂载项，登录后直接进入该游戏。多游戏注册与选游戏大厅将在后续实现。
