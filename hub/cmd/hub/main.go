@@ -1,7 +1,8 @@
-// Command hub 是 CLI_GAME 平台的服务端。
+// Command hub 是 SSH 网关。
 //
-// 它负责账号、房间、SSH 接入，并把游戏挂进来——现在只挂了 uno。
-// 游戏本身是独立模块（games/uno），平台不认识它的规则。
+// 它只做三件事：处理 SSH（认证、PTY、窗口尺寸）、拿玩家令牌、把后端推来的
+// 快照渲染成终端界面。**不建房间、不执行游戏规则、不碰数据库**——那些都在
+// cmd/backend 里。
 package main
 
 import (
@@ -9,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,27 +19,19 @@ import (
 	"github.com/xingzitian/TTYFish/games/uno"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
 	unoUI "github.com/xingzitian/TTYFish/games/uno/ui"
+	"github.com/xingzitian/TTYFish/hub/internal/backend"
 	"github.com/xingzitian/TTYFish/hub/internal/registry"
 	"github.com/xingzitian/TTYFish/hub/internal/sshd"
-	"github.com/xingzitian/TTYFish/hub/internal/store"
-	"github.com/xingzitian/TTYFish/hub/internal/web"
 	"github.com/xingzitian/TTYFish/sdk/ui"
 )
 
 func main() {
 	addr := flag.String("addr", ":2222", "SSH 监听地址")
-	httpAddr := flag.String("http", ":8080", "HTTP 监听地址（空表示不开）")
-	dbPath := flag.String("db", "hub.db", "SQLite 文件")
 	hostKey := flag.String("host-key", "host_ed25519", "host key 文件（不存在会自动生成）")
+	backendURL := flag.String("backend", "http://127.0.0.1:8081", "后端房间 API 地址")
+	gatewayToken := flag.String("gateway-token", os.Getenv("TTYFISH_GATEWAY_TOKEN"), "网关凭证（默认读环境变量 TTYFISH_GATEWAY_TOKEN）")
 	color := flag.String("color", "block", "默认颜色深浅：block 满色 / text 文字上色 / plain 无色")
-	stack := flag.Bool("stack", false, "允许 +2/+4 叠加")
-	strict := flag.Bool("strict-draw", false, "摸牌后立即结束回合")
-	unoPenalty := flag.Bool("uno", false, "开启漏喊 UNO 罚牌")
-	challenge := flag.Bool("challenge", true, "允许质疑 +4")
-	match := flag.Int("match", 0, "长局目标分；0 表示只打一局")
-	botDelay := flag.Duration("bot-delay", 800*time.Millisecond, "电脑思考时间")
 	idle := flag.Duration("idle-timeout", 30*time.Minute, "空闲连接超时")
-	sshHint := flag.String("ssh-hint", "-p 2222 play@127.0.0.1", "网页登录的 SSH 连接参数；部署时设置为玩家可访问的地址，例如 -p 2222 play@game.example.com")
 	flag.Parse()
 
 	mode, ok := ui.ParseColorMode(*color)
@@ -47,39 +39,42 @@ func main() {
 		fmt.Fprintf(os.Stderr, "未知的颜色深浅 %q（可选 block / text / plain）\n", *color)
 		os.Exit(2)
 	}
-
-	rules := engine.Rules{
-		Stacking:   *stack,
-		StrictDraw: *strict,
-		UnoPenalty: *unoPenalty,
-		Challenge:  *challenge,
-		MatchTo:    *match,
+	if *gatewayToken == "" {
+		fmt.Fprintln(os.Stderr, "缺少网关凭证：用 -gateway-token 或环境变量 TTYFISH_GATEWAY_TOKEN 提供")
+		os.Exit(2)
 	}
 
-	st, err := store.Open(*dbPath)
-	if err != nil {
-		slog.Error("打开数据库失败", "err", err)
+	accounts := backend.New(*backendURL, *gatewayToken)
+
+	// 启动前先确认后端可达，免得玩家连上来才发现连不上。
+	checkCtx, cancelCheck := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := accounts.Health(checkCtx); err != nil {
+		cancelCheck()
+		slog.Error("后端不可达", "backend", *backendURL, "err", err)
 		os.Exit(1)
 	}
-	defer st.Close()
+	cancelCheck()
+
+	// 规则由后端决定；这里这份只用于界面展示（谁在出牌、剩几张）。
+	displayRules := engine.Rules{Challenge: true}
 
 	srv, err := sshd.New(sshd.Config{
 		Addr:        *addr,
 		HostKeyPath: *hostKey,
+		BackendURL:  *backendURL,
+		Accounts:    accounts,
+		PrefsPath:   filepath.Join(filepath.Dir(*hostKey), "prefs.json"),
+		IdleTimeout: *idle,
+		Mode:        mode,
 		Game: registry.Entry{
 			ID:   "uno",
-			Game: uno.New(rules),
+			Game: uno.New(displayRules),
 			NewUI: func(c registry.UIContext) registry.Model {
 				return unoUI.NewModel(unoUI.Identity{Key: c.Key, Name: c.Name}, c.Client, unoUI.Options{
-					Rules: rules, Mode: c.Mode, ModeOf: c.ModeOf, SetMode: c.SetMode,
+					Rules: displayRules, Mode: c.Mode, ModeOf: c.ModeOf, SetMode: c.SetMode,
 				}, unoUI.NewRenderer(c.Output, c.Term))
 			},
 		},
-		PrefsPath:   filepath.Join(filepath.Dir(*hostKey), "uno-prefs.json"),
-		Store:       st,
-		BotDelay:    *botDelay,
-		IdleTimeout: *idle,
-		Mode:        mode,
 	})
 	if err != nil {
 		slog.Error("启动 SSH 失败", "err", err)
@@ -89,47 +84,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// HTTP：登录页 + 账号页。
-	var hs *http.Server
-	if *httpAddr != "" {
-		hs = &http.Server{
-			Addr:              *httpAddr,
-			Handler:           web.New(st, *sshHint).Handler(),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
-		go func() {
-			slog.Info("HTTP 已启动", "addr", *httpAddr, "db", filepath.Clean(*dbPath))
-			if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Error("HTTP 退出", "err", err)
-			}
-		}()
-	}
-
-	// 定期清理过期挑战和会话。
-	go func() {
-		t := time.NewTicker(5 * time.Minute)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				st.Sweep()
-			}
-		}
-	}()
-
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if hs != nil {
-			_ = hs.Shutdown(shutdownCtx)
-		}
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	slog.Info("hub 启动", "addr", *addr, "host_key", *hostKey)
+	slog.Info("SSH 网关启动", "addr", *addr, "backend", *backendURL)
 	if err := srv.ListenAndServe(); err != nil && ctx.Err() == nil {
 		slog.Error("监听失败", "err", err)
 		os.Exit(1)

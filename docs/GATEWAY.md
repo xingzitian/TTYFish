@@ -51,6 +51,29 @@
 拿到玩家令牌后，`session.New(reg, …)` 换成 `remote.New(base, token, "uno")`，
 界面工厂的 `UIContext.Key` 用**账号 ID**（不是指纹），这样换钥匙不丢偏好。
 
+## 已完成（第二轮）
+
+- `internal/sshd` 不再依赖 `*store.Store`：认证全部改成调后端
+  - 密码登录 → `POST /api/v1/auth/password`
+  - `ssh hub auth <码>` → `POST .../challenges/confirm`
+  - 横幅置空（钩子保留）
+- `cmd/hub` 变成纯网关：不打开数据库、不建房间、不跑规则
+- 新包 `internal/backend`：账号 API 的客户端（含错误码到中文提示的映射）
+- 测试换成 `httptest` 假后端：不再需要 SQLite 也能测网关
+
+## 未完成
+
+**密钥登录这条路径还不对。** 现象：
+
+- 在 `WithPublicKeyAuth` 回调里调后端 → 回调被 SSH 协议调用两次（探测 + 验签），
+  第二次会撞后端每分钟 10 次的限流；就算加缓存，客户端仍然收到
+  `Permission denied`（服务器侧日志显示登录成功）。
+- 改成"回调只放行、会话里补验"→ 会话里 `s.PublicKey()` 拿到的公钥和握手时
+  不一致，补验失败，界面挂不上。
+
+两条路都试过了，需要再看 `charmbracelet/ssh` 的认证回调语义。**目前密码登录
+可用，密钥登录不通**——这一版先不动它，等确认库的正确用法。
+
 ## 需要定的一件事
 
 **SSH 登录横幅要不要保留？**
