@@ -159,13 +159,23 @@ func New(cfg Config) (*ssh.Server, error) {
 			if cfg.Accounts == nil {
 				return false
 			}
-			// 这里只做"这把钥匙允许尝试"的判断，不调后端。
-			//
-			// SSH 协议会调这个回调两次（探测 + 验签），在网络请求里做认证既浪费
-			// 限流预算，也会让协议层拿不到明确的成功信号。真正的身份校验放在
-			// 会话里做（见 handler），失败时直接告诉玩家原因再断开。
-			ctx.SetValue("publicKeyLine", strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))))
-			slog.Info("公钥尝试", "user", ctx.User(), "fingerprint", fp, "remote", ctx.RemoteAddr())
+			// SSH 协议会调这个回调两次（探测 + 验签），所以第一次登录成功就缓存，
+			// 第二次直接复用——否则会白烧一次后端每分钟 10 次的限流预算。
+			cacheKey := ctx.User() + "|" + fp + "|" + ctx.RemoteAddr().String()
+			if p, ok := takeLogin(cacheKey); ok {
+				storePlayer(ctx, p)
+				return true
+			}
+			callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			p, err := cfg.Accounts.LoginKey(callCtx, ctx.User(), strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))))
+			if err != nil {
+				slog.Warn("密钥登录失败", "user", ctx.User(), "fingerprint", fp, "err", err)
+				return false
+			}
+			putLogin(cacheKey, p)
+			storePlayer(ctx, p)
+			slog.Info("密钥登录", "user", ctx.User(), "fingerprint", fp, "account", p.Account.ID)
 			return true
 		}),
 

@@ -223,9 +223,7 @@ func TestGatewayAuthentication(t *testing.T) {
 		auth       gossh.AuthMethod
 		wantMount  bool
 	}{
-		// 密钥登录这条路还有问题：会话里拿到的 public key 与握手时的不一致，
-		// 补验身份时会失败。先用密码路径保证网关链路是通的，密钥待修。
-		// 详细见 docs/GATEWAY.md 的"未完成"。
+		{"正确密钥", "alice", gossh.PublicKeys(key), true},
 		{"正确密码", "alice", gossh.Password("alice-password-123"), true},
 		{"用户名不对", "bob", gossh.PublicKeys(key), false},
 		{"密钥不对", "alice", gossh.PublicKeys(other), false},
