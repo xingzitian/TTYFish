@@ -1,0 +1,84 @@
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+}
+
+/* 登录/注册这类页面：内容窄一点、居中 */
+.auth-page {
+  min-height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 16px 8vh;
+  box-sizing: border-box;
+}
+
+.auth-stack {
+  width: 100%;
+  max-width: 560px;
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  color: #f0f6fc;
+}
+
+.page-sub {
+  margin: 0 0 20px;
+  color: #8b949e;
+  font-size: 14px;
+}
+
+.hint {
+  color: #8b949e;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.cmd {
+  display: block;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  color: #7ee787;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.card + .card {
+  margin-top: 16px;
+}
+
+.fp {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: #8b949e;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}

@@ -68,6 +68,27 @@ jobs:
             go test -count=1 ./...
           fi
 
+  web:
+    name: web (Vue 前端)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 安装依赖
+        working-directory: web
+        run: npm ci
+
+      # 这一步同时跑 vue-tsc 类型检查，类型不对会直接失败
+      - name: 构建
+        working-directory: web
+        run: npm run build
+
   smoke:
     name: smoke (登录链路)
     runs-on: ubuntu-latest

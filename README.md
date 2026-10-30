@@ -22,12 +22,15 @@ ssh -p 2222 你的名字@你的服务器
 
 ```
 sdk/          契约：Game 接口、客户端快照、界面小工具（第三方游戏只依赖它）
-hub/          平台：SSH 接入、房间、账号（开发中）
+hub/          平台：SSH 接入、房间、账号 API（cmd/backend）
+web/          网页前端：Vue 3 + TypeScript + Element Plus
 games/uno/    UNO 游戏：规则引擎、AI、终端界面
-docs/         需求、架构、游戏开发指南
+deploy/       服务器侧部署脚本
+docs/         需求、架构、游戏开发指南、部署、前端
 ```
 
-三个独立 Go 模块，依赖方向单向：`games/* → sdk ← hub`。
+三个 Go 模块 + 一个前端工程，依赖方向单向：`games/* → sdk ← hub`，
+前端只通过 HTTP JSON API 和 `hub` 通信。
 
 **加一个游戏**只需要在 `games/` 下新建一个模块实现 `sdk/game.Game`，
 再在 `hub/cmd/hub` 注册规则实例和 UI 工厂，平台内部无需改动。见 [docs/GAME_SDK.md](docs/GAME_SDK.md)。
