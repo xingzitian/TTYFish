@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "TTYFish 账号认证 API",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "阶段一账号 API。核心后端独立运行，Web/SSH 通过 HTTP 调用。仅使用 Authorization Bearer，不接受 Cookie。所有响应禁止缓存。注册和密码认证按直连来源 IP 共用每分钟 10 次预算。"
   },
   "servers": [
@@ -16,6 +16,1105 @@
     }
   ],
   "paths": {
+    "/api/v1/games": {
+      "get": {
+        "operationId": "listGames",
+        "summary": "列出游戏及聊天预设",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GameInfo"
+                      }
+                    },
+                    "chat_presets": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items",
+                    "chat_presets"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms": {
+      "post": {
+        "operationId": "createRoom",
+        "summary": "创建房间并加入；同账号只允许一个当前房间",
+        "responses": {
+          "201": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRoom"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/room": {
+      "get": {
+        "operationId": "getCurrentRoom",
+        "summary": "恢复当前成员关系；无房间返回 404",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{code}": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "六位房间码，可使用小写；不存在时返回 404，绝不自动建房",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Za-hj-np-z2-9]{6}$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getRoom",
+        "summary": "仅返回当前账号所在房间的私有快照",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{code}/join": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "六位房间码，可使用小写；不存在时返回 404，绝不自动建房",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Za-hj-np-z2-9]{6}$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "joinRoom",
+        "summary": "加入已存在房间；已开始后仅允许原成员重连",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{code}/leave": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "六位房间码，可使用小写；不存在时返回 404，绝不自动建房",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Za-hj-np-z2-9]{6}$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "leaveRoom",
+        "summary": "退出当前房间并关闭该账号的推送连接",
+        "responses": {
+          "204": {
+            "description": "成功"
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{code}/start": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "六位房间码，可使用小写；不存在时返回 404，绝不自动建房",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Za-hj-np-z2-9]{6}$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "startRoom",
+        "summary": "房主开局或推进下一局",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{code}/bots": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "六位房间码，可使用小写；不存在时返回 404，绝不自动建房",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Za-hj-np-z2-9]{6}$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "addBot",
+        "summary": "仅房主在大厅阶段添加一个机器人",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{code}/chat": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "六位房间码，可使用小写；不存在时返回 404，绝不自动建房",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Za-hj-np-z2-9]{6}$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "sendPresetChat",
+        "summary": "发送游戏列表返回的第 preset 条快捷语",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomChat"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{code}/restart-votes": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "六位房间码，可使用小写；不存在时返回 404，绝不自动建房",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Za-hj-np-z2-9]{6}$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "voteRestart",
+        "summary": "发起或参与重开投票",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestartVote"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rooms/{code}/actions": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "六位房间码，可使用小写；不存在时返回 404，绝不自动建房",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Za-hj-np-z2-9]{6}$"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "submitGameAction",
+        "summary": "按玩家账号座位和 expected_revision 执行游戏动作",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomSnapshot"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoomAction"
+              }
+            }
+          }
+        },
+        "description": "座位由后端填写，payload 不接受 seat。expected_revision 必须来自最新快照；过期或重复请求返回 409 stale_state，不修改状态。失败或网络中断后先获取最新快照，不自动重放动作。"
+      }
+    },
+    "/api/v1/rooms/{code}/events": {
+      "parameters": [
+        {
+          "name": "code",
+          "in": "path",
+          "required": true,
+          "description": "六位房间码，可使用小写；不存在时返回 404，绝不自动建房",
+          "schema": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Za-hj-np-z2-9]{6}$"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "streamRoomEvents",
+        "summary": "SSE 推送玩家完整快照，最后建立的连接接管该账号",
+        "description": "使用携带 Authorization 的 fetch 流，不把令牌放 URL。首次立即发送 snapshot；之后推送完整快照，允许跳过旧帧。id 为房间 revision，仅用于诊断，不支持 Last-Event-ID 补发。重连发送当前完整快照。heartbeat 每 5 秒一次；kicked 后旧连接关闭，auth_expired 后应重新登录。SSE 断开时大厅成员退出，对局玩家转机器人代打；仍在原房间的账号重连可接管同一座位。",
+        "responses": {
+          "200": {
+            "description": "SSE：snapshot / heartbeat / kicked / auth_expired",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "id: 7\nevent: snapshot\ndata: {\"protocol_version\":1,\"game_id\":\"uno\",\"code\":\"ABC234\",\"revision\":7,...}\n\n"
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_room_request：字段、房间码或动作格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "无效玩家会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "room_forbidden：非房主、非成员或操作其他房间",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "room_not_found：房间或成员关系不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "already_in_room、stale_state 或 invalid_action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "games_disabled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/ssh/challenges": {
       "post": {
         "operationId": "startSSHChallenge",
@@ -1326,6 +2425,713 @@
       }
     },
     "schemas": {
+      "UnoPlay": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "card_id": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "color": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "uno": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "card_id",
+          "color"
+        ]
+      },
+      "EmptyPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "UnoCatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "UnoChallengeDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "challenge": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "challenge"
+        ]
+      },
+      "CreateRoom": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "game_id": {
+            "type": "string",
+            "example": "uno"
+          }
+        },
+        "required": [
+          "game_id"
+        ]
+      },
+      "RoomChat": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "preset": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "preset"
+        ]
+      },
+      "RestartVote": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "agree": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agree"
+        ]
+      },
+      "RoomAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expected_revision": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "play_card"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/UnoPlay"
+              }
+            },
+            "required": [
+              "expected_revision",
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expected_revision": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "draw_card"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/EmptyPayload"
+              }
+            },
+            "required": [
+              "expected_revision",
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expected_revision": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "pass"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/EmptyPayload"
+              }
+            },
+            "required": [
+              "expected_revision",
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expected_revision": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "call_uno"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/EmptyPayload"
+              }
+            },
+            "required": [
+              "expected_revision",
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expected_revision": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "catch_uno"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/UnoCatch"
+              }
+            },
+            "required": [
+              "expected_revision",
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "expected_revision": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "resolve_challenge"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/UnoChallengeDecision"
+              }
+            },
+            "required": [
+              "expected_revision",
+              "type",
+              "payload"
+            ]
+          }
+        ]
+      },
+      "GameAction": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "play_card"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/UnoPlay"
+              }
+            },
+            "required": [
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "draw_card"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/EmptyPayload"
+              }
+            },
+            "required": [
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "pass"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/EmptyPayload"
+              }
+            },
+            "required": [
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "call_uno"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/EmptyPayload"
+              }
+            },
+            "required": [
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "catch_uno"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/UnoCatch"
+              }
+            },
+            "required": [
+              "type",
+              "payload"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "resolve_challenge"
+                ]
+              },
+              "payload": {
+                "$ref": "#/components/schemas/UnoChallengeDecision"
+              }
+            },
+            "required": [
+              "type",
+              "payload"
+            ]
+          }
+        ]
+      },
+      "GameInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "min_players": {
+            "type": "integer"
+          },
+          "max_players": {
+            "type": "integer"
+          },
+          "protocol_version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "min_players",
+          "max_players",
+          "protocol_version"
+        ]
+      },
+      "RoomPlayer": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "seat": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "host": {
+            "type": "boolean"
+          },
+          "connected": {
+            "type": "boolean"
+          },
+          "bot": {
+            "type": "boolean"
+          },
+          "offline": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seat",
+          "name",
+          "host",
+          "connected",
+          "bot",
+          "offline"
+        ]
+      },
+      "RoomVote": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "yes": {
+            "type": "integer"
+          },
+          "no": {
+            "type": "integer"
+          },
+          "need": {
+            "type": "integer"
+          },
+          "ends_in": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "yes",
+          "no",
+          "need",
+          "ends_in"
+        ]
+      },
+      "RoomTimeline": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "at_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "seat": {
+            "type": "integer"
+          },
+          "chat": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "at_ms",
+          "seat",
+          "text"
+        ]
+      },
+      "RoomSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "game_id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "lobby",
+              "playing",
+              "over"
+            ]
+          },
+          "players": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoomPlayer"
+            }
+          },
+          "my_seat": {
+            "type": "integer"
+          },
+          "max_seats": {
+            "type": "integer"
+          },
+          "is_host": {
+            "type": "boolean"
+          },
+          "view": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UnoView"
+              }
+            ],
+            "nullable": true
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoomTimeline"
+            }
+          },
+          "vote": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RoomVote"
+              }
+            ],
+            "nullable": true
+          },
+          "notice": {
+            "type": "string"
+          },
+          "pending_left_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kicked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "protocol_version",
+          "game_id",
+          "code",
+          "revision",
+          "phase",
+          "players",
+          "my_seat",
+          "max_seats",
+          "is_host",
+          "view",
+          "timeline",
+          "vote",
+          "notice",
+          "pending_left_ms",
+          "kicked"
+        ]
+      },
+      "UnoCard": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "color": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4
+          },
+          "kind": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5
+          },
+          "num": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "color",
+          "kind",
+          "num"
+        ]
+      },
+      "UnoView": {
+        "type": "object",
+        "description": "engine.Observe 生成的当前座位视图，不包含其他玩家手牌、牌堆顺序、随机种子。阶段数字 0=playing/1=round_over/2=match_over；颜色 0=red/1=yellow/2=green/3=blue/4=no_color；牌型 0=number/1=skip/2=reverse/3=draw_two/4=wild/5=wild_draw_four。",
+        "properties": {
+          "seat": {
+            "type": "integer"
+          },
+          "seat_count": {
+            "type": "integer"
+          },
+          "my_turn": {
+            "type": "boolean"
+          },
+          "turn": {
+            "type": "integer"
+          },
+          "phase": {
+            "type": "integer"
+          },
+          "hand": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnoCard"
+            }
+          },
+          "hand_counts": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "top": {
+            "$ref": "#/components/schemas/UnoCard"
+          },
+          "active": {
+            "type": "integer"
+          },
+          "dir": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "drawn_id": {
+            "type": "integer",
+            "description": "仅当前回合的牌主可见刚摸牌 ID，其余为 -1"
+          },
+          "deck_count": {
+            "type": "integer"
+          },
+          "discard_count": {
+            "type": "integer"
+          },
+          "legal": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GameAction"
+            }
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "scores": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "round_winner": {
+            "type": "integer"
+          },
+          "match_winner": {
+            "type": "integer"
+          },
+          "match_to": {
+            "type": "integer"
+          },
+          "uno_pending": {
+            "type": "integer"
+          },
+          "challenge": {
+            "type": "object",
+            "properties": {
+              "by": {
+                "type": "integer"
+              },
+              "target": {
+                "type": "integer"
+              },
+              "prev_color": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "required": [
+          "seat",
+          "turn",
+          "hand",
+          "hand_counts",
+          "top",
+          "legal"
+        ]
+      },
     "SSHChallengeStart": {
       "type": "object",
       "additionalProperties": false,
@@ -1631,7 +3437,14 @@
                   "internal_error",
                   "gateway_disabled",
                   "gateway_unauthorized",
-                  "challenge_invalid"
+                  "challenge_invalid",
+                  "invalid_room_request",
+                  "already_in_room",
+                  "room_not_found",
+                  "room_forbidden",
+                  "stale_state",
+                  "invalid_action",
+                  "games_disabled"
                 ]
               },
               "message": {

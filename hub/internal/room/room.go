@@ -27,6 +27,7 @@ var (
 	ErrPhase    = errors.New("现在不能做这个操作")
 	ErrCode     = errors.New("房间码是 6 位字母数字，且不含 0/O/1/I 这些易混字符")
 	ErrSeat     = errors.New("这个动作不是你这个座位发的")
+	ErrStale    = errors.New("房间状态已更新，请获取最新快照后重试")
 )
 
 // 平台对外的一帧、阶段、玩家信息都来自 sdk/client——
@@ -112,26 +113,28 @@ type Room struct {
 	Code string
 	Game game.Game
 
-	mu         sync.Mutex
-	opts       Options
-	phase      Phase
-	state      any
-	seats      []*seat
-	byFP       map[string]*seat
-	subs       map[*seat]chan Snapshot
-	turnAt     time.Time
-	lastActive time.Time
-	startedAt  time.Time
-	timeline   []TimelineEntry
-	logSeq     int
-	pendingID  string
-	pendingEnd time.Time
-	pendingAct any
-	vote       *voteState
-	notice     string
-	noticeAt   time.Time
-	closed     bool
-	stop       chan struct{}
+	mu          sync.Mutex
+	opts        Options
+	phase       Phase
+	state       any
+	seats       []*seat
+	byFP        map[string]*seat
+	subs        map[*seat]chan Snapshot
+	turnAt      time.Time
+	lastActive  time.Time
+	abandonedAt time.Time
+	startedAt   time.Time
+	timeline    []TimelineEntry
+	logSeq      int
+	pendingID   string
+	pendingEnd  time.Time
+	pendingAct  any
+	vote        *voteState
+	notice      string
+	noticeAt    time.Time
+	closed      bool
+	revision    uint64
+	stop        chan struct{}
 }
 
 // New 建一间空房。
@@ -161,6 +164,7 @@ func (r *Room) Join(fp, name string) (int, error) {
 	defer r.mu.Unlock()
 
 	if s, ok := r.byFP[fp]; ok {
+		r.abandonedAt = time.Time{}
 		s.connected = true
 		s.bot = false
 		s.offlineAt = time.Time{}
@@ -192,6 +196,7 @@ func (r *Room) Join(fp, name string) (int, error) {
 	}
 	r.seats = append(r.seats, s)
 	r.byFP[fp] = s
+	r.abandonedAt = time.Time{}
 	r.setNotice(fmt.Sprintf("%s 加入", name))
 	r.broadcastLocked()
 	return s.seat, nil
@@ -215,6 +220,16 @@ func (r *Room) Disconnect(fp string) {
 	} else {
 		s.bot = true
 		r.setNotice(fmt.Sprintf("%s 掉线了，先由电脑代打", s.name))
+	}
+	humansOnline := false
+	for _, player := range r.seats {
+		if player.fp != "" && player.connected {
+			humansOnline = true
+			break
+		}
+	}
+	if !humansOnline && r.abandonedAt.IsZero() {
+		r.abandonedAt = r.opts.Now()
 	}
 	r.broadcastLocked()
 }
@@ -272,6 +287,24 @@ func (r *Room) nextRoundLocked() {
 func (r *Room) AddBot(name string) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.addBotLocked(name)
+}
+
+// AddBotBy enforces the host permission in the same lock as the mutation.
+func (r *Room) AddBotBy(fp string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.byFP[fp]
+	if !ok {
+		return 0, ErrNotIn
+	}
+	if !s.host {
+		return 0, ErrNotHost
+	}
+	return r.addBotLocked("")
+}
+
+func (r *Room) addBotLocked(name string) (int, error) {
 
 	if r.phase != Lobby {
 		return 0, ErrPhase
@@ -379,6 +412,19 @@ func (r *Room) trimTimelineLocked() {
 func (r *Room) Act(fp string, a any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.actLocked(fp, a)
+}
+
+func (r *Room) ActAtRevision(fp string, revision uint64, a any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.revision != revision {
+		return ErrStale
+	}
+	return r.actLocked(fp, a)
+}
+
+func (r *Room) actLocked(fp string, a any) error {
 
 	s, ok := r.byFP[fp]
 	if !ok {
@@ -517,6 +563,11 @@ func (r *Room) Subscribe(fp string) (<-chan Snapshot, func(), error) {
 		select {
 		case old <- kicked:
 		default:
+			select {
+			case <-old:
+			default:
+			}
+			old <- kicked
 		}
 		close(old)
 		r.setNotice(fmt.Sprintf("%s 在别处登录，旧连接已断开", s.name))
@@ -765,13 +816,19 @@ func (r *Room) setNotice(msg string) {
 }
 
 func (r *Room) broadcastLocked() {
+	r.revision++
 	// 有任何一次广播就说明房间还活着，用它来驱动回收计时。
 	r.lastActive = r.opts.Now()
 	for s, ch := range r.subs {
 		select {
 		case ch <- r.snapshotLocked(s):
 		default:
-			// 客户端读得慢就丢帧，绝不阻塞房间。
+			// Drop the oldest queued full snapshot; retain the latest state.
+			select {
+			case <-ch:
+			default:
+			}
+			ch <- r.snapshotLocked(s)
 		}
 	}
 }
@@ -781,14 +838,20 @@ func (r *Room) broadcastLocked() {
 func (r *Room) Abandoned(ttl time.Duration) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.connectedCountLocked() > 0 {
-		return false
+	for _, player := range r.seats {
+		if player.fp != "" && player.connected {
+			return false
+		}
+	}
+	if !r.abandonedAt.IsZero() {
+		return r.opts.Now().Sub(r.abandonedAt) > ttl
 	}
 	return r.opts.Now().Sub(r.lastActive) > ttl
 }
 
 func (r *Room) snapshotLocked(s *seat) Snapshot {
 	snap := Snapshot{
+		Revision: r.revision,
 		Code:     r.Code,
 		Phase:    r.phase,
 		MySeat:   s.seat,

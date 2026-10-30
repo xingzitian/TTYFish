@@ -219,7 +219,7 @@ func TestOpenAPIContractIsServed(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 12 {
+	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 24 {
 		t.Fatalf("unexpected contract: %s, %d paths", spec.OpenAPI, len(spec.Paths))
 	}
 }

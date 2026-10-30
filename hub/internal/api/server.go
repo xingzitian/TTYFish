@@ -1,4 +1,4 @@
-// Package api exposes the account service as a versioned JSON HTTP API.
+// Package api exposes account, room and game services through JSON HTTP and SSE.
 package api
 
 import (
@@ -13,9 +13,11 @@ import (
 	"strings"
 
 	"github.com/xingzitian/TTYFish/hub/internal/account"
+	"github.com/xingzitian/TTYFish/hub/internal/play"
 )
 
 type Config struct {
+	Games *play.Service
 	// GatewayToken authenticates trusted SSH gateways, never browser clients.
 	GatewayToken   string
 	AllowedOrigins []string
@@ -53,6 +55,7 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 	s.mux.HandleFunc("GET /api/v1/me/keys", s.keys)
 	s.mux.HandleFunc("POST /api/v1/me/keys", s.addKey)
 	s.mux.HandleFunc("DELETE /api/v1/me/keys/{fingerprint}", s.deleteKey)
+	s.registerRoomRoutes()
 	return s, nil
 }
 
@@ -326,8 +329,10 @@ func report(w http.ResponseWriter, err error) {
 		failure(w, 409, "last_credential", "请先设置密码或添加其他公钥，再删除最后一把公钥")
 	case errors.Is(err, account.ErrChallengeInvalid):
 		failure(w, 409, "challenge_invalid", "确认码无效、已使用、已过期或与账号公钥不匹配")
+	case isPlayError(err):
+		reportPlayError(w, err)
 	default:
-		slog.Error("账号 API 请求失败", "err", err)
+		slog.Error("后端 API 请求失败", "err", err)
 		failure(w, 500, "internal_error", "服务暂时不可用")
 	}
 }

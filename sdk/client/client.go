@@ -57,6 +57,7 @@ type TimelineEntry struct {
 // View 是游戏自己 Observe 出来的东西，平台不解释它的内容；
 // 游戏的界面负责把它断言回自己的类型。
 type Snapshot struct {
+	Revision uint64
 	Code     string
 	Phase    Phase
 	Players  []Player

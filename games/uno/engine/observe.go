@@ -48,7 +48,7 @@ func Observe(s *State, seat int) Observation {
 		Active:       s.Active,
 		Dir:          s.Dir,
 		Pending:      s.Pending,
-		DrawnID:      s.DrawnID,
+		DrawnID:      -1,
 		DeckCount:    len(s.Deck),
 		DiscardCount: len(s.Discard),
 		HandCounts:   make([]int, s.SeatCount),
@@ -67,6 +67,9 @@ func Observe(s *State, seat int) Observation {
 		o.Challenge = &c
 	}
 	if seat >= 0 && seat < s.SeatCount {
+		if seat == s.Turn {
+			o.DrawnID = s.DrawnID
+		}
 		o.MyTurn = s.Turn == seat
 		o.Hand = append([]Card(nil), s.Hands[seat]...)
 		o.Legal = LegalMoves(s, seat)
