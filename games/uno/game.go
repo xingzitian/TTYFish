@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/xingzitian/TTYFish/sdk/game"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
+	"github.com/xingzitian/TTYFish/sdk/game"
 )
 
 // Game 是一个可以塞进大厅的 UNO 游戏定义。

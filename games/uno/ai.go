@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xingzitian/TTYFish/sdk/agent"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
+	"github.com/xingzitian/TTYFish/sdk/agent"
 )
 
 // aiSystem 是给模型的系统提示。只要一个数字，省 token 也省解析的麻烦。

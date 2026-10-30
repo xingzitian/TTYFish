@@ -1,5 +1,7 @@
 # TTYFish
 
+[![CI](https://github.com/xingzitian/TTYFish/actions/workflows/ci.yml/badge.svg)](https://github.com/xingzitian/TTYFish/actions/workflows/ci.yml)
+
 用 SSH 当客户端、用公钥当账号的多人小游戏平台。
 
 ```

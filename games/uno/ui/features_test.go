@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/xingzitian/TTYFish/sdk/client"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
+	"github.com/xingzitian/TTYFish/sdk/client"
 )
 
 // TestTimelineEntryWithoutCardDoesNotPanic 记录里没有牌面时不能崩。

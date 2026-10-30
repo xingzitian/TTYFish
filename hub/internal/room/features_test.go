@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xingzitian/TTYFish/sdk/game"
 	"github.com/xingzitian/TTYFish/games/uno"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
+	"github.com/xingzitian/TTYFish/sdk/game"
 )
 
 // newUnoRoom 建一间开了"漏喊 UNO 罚牌"的房，方便测宽限窗口。

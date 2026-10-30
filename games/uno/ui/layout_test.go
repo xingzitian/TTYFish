@@ -7,9 +7,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/xingzitian/TTYFish/games/uno/engine"
 	"github.com/xingzitian/TTYFish/sdk/client"
 	"github.com/xingzitian/TTYFish/sdk/ui"
-	"github.com/xingzitian/TTYFish/games/uno/engine"
 )
 
 // TestColorModes 三种颜色深浅各自该产生什么转义，而且是**全局**的：

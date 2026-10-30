@@ -14,3 +14,7 @@ uno-prefs.json
 # 本地环境
 .env
 .DS_Store
+
+# CI 产物
+/dist/
+

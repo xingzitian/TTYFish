@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xingzitian/TTYFish/sdk/agent"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
+	"github.com/xingzitian/TTYFish/sdk/agent"
 )
 
 // sampleObs 造一个"轮到我、手里有牌可出"的观察。
