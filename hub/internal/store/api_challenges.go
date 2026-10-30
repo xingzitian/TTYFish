@@ -16,11 +16,17 @@ func (s *Store) NewAPIChallenge(accountID string, ttl time.Duration) (Challenge,
 
 // ConfirmAPIChallenge verifies the account, username, key, purpose and deadline atomically.
 func (s *Store) ConfirmAPIChallenge(code, username, fp string) error {
-	result, err := s.db.Exec(`UPDATE challenges SET state='confirmed',confirmed_fp=?
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UnixMilli()
+	result, err := tx.Exec(`UPDATE challenges SET state='confirmed',confirmed_fp=?
  WHERE code_hash=? AND purpose=? AND state='pending' AND expires_at>?
  AND EXISTS (SELECT 1 FROM accounts a JOIN identities i ON i.account_id=a.id
  WHERE a.id=challenges.account_id AND a.handle=? AND i.fingerprint=?)`,
-		fp, hash(code), apiChallengePurpose, time.Now().UnixMilli(), username, fp)
+		fp, hash(code), apiChallengePurpose, now, username, fp)
 	if err != nil {
 		return err
 	}
@@ -31,7 +37,10 @@ func (s *Store) ConfirmAPIChallenge(code, username, fp string) error {
 	if n != 1 {
 		return ErrChallengeInvalid
 	}
-	return nil
+	if _, err = tx.Exec(`UPDATE identities SET last_used_at=MAX(last_used_at,?) WHERE fingerprint=?`, now, fp); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RedeemAPIChallenge consumes the challenge and inserts its session in one transaction.

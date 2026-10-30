@@ -51,6 +51,8 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 | PUT | `/api/v1/me/password` | 玩家 Bearer | 设置或替换密码 |
 | GET | `/api/v1/me/keys` | 玩家 Bearer | 列出自己的公钥 |
 | POST | `/api/v1/me/keys` | 玩家 Bearer | 添加公钥 |
+| GET | `/api/v1/me/keys/{fingerprint}` | 玩家 Bearer | 查询单个公钥、名称和最后使用时间 |
+| PATCH | `/api/v1/me/keys/{fingerprint}` | 玩家 Bearer | 设置或清除公钥名称 |
 | DELETE | `/api/v1/me/keys/{fingerprint}` | 玩家 Bearer | 删除自己的公钥 |
 | POST | `/api/v1/internal/auth/ssh` | 网关 Bearer | 私钥证明成功后换取玩家会话 |
 | POST | `/api/v1/auth/ssh/challenges` | 无 | 为固定用户名生成网页登录挑战 |
@@ -62,6 +64,36 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 注册至少提供密码或公钥。密码为 10–72 个 UTF-8 字节，使用 bcrypt 哈希；不支持清空密码。公钥必须是单个标准 OpenSSH 公钥，不接受私钥、证书、多个公钥或 authorized_keys 选项。相同公钥不能绑定多个账号。同账号重复添加公钥幂等，返回 201。删除公钥必须保留至少一种登录凭证；已有密码的账号可以删除最后一把公钥。
 
 账号、公钥时间均为 RFC 3339。列表格式为 `{ "items": [] }`，无数据返回空数组。接口暂不提供分页、改用户名、删除账号或找回密码。
+
+### 公钥名称与使用时间
+
+添加公钥可传 `{"public_key":"ssh-ed25519 AAAA...","name":"工作电脑"}`，注册时可传 `key_name` 为初始公钥命名。名称允许中文，去除首尾空白后最多 64 个 Unicode 字符，不允许控制字符；名称仅作备注，不要求唯一，不参与认证。
+
+使用 `PATCH /api/v1/me/keys/{fingerprint}`，请求体 `{"name":"备用笔记本"}` 修改名称，`{"name":""}` 清除名称。缺少 name 或传 null 返回 400。添加同一把公钥时，省略 name 保留原名称；显式传 name 则更新名称。
+
+列表、添加、单个查询和改名响应均包含以下字段：
+
+```json
+{
+  "fingerprint": "SHA256:...",
+  "public_key": "ssh-ed25519 AAAA...",
+  "name": "工作电脑",
+  "created_at": "2026-10-30T15:00:00+08:00",
+  "last_used_at": null
+}
+```
+
+新公钥未使用时 last_used_at 为 null。可信网关完成密钥认证登录，或成功确认 SSH 登录挑战后，后端更新实际使用的那一把公钥；密码登录、查询、改名、重复添加和失败认证均不刷新。正式密钥登录时，时间更新与会话写入在同一事务内完成，写入失败会回滚。
+
+旧数据库自动添加名称字段，原账号、公钥和已记录时间保留。早期版本的 last_used_at 可能记录的是添加或绑定时间，无法追溯重建历史认证时间；升级后的新认证按上述规则记录。指纹中可能包含 `/` 和 `+`，必须将整个指纹作为一个路径段 URL 编码。只能查询或修改自己的公钥，跨账号操作返回 404。
+
+```powershell
+$fingerprint = [Uri]::EscapeDataString($savedKey.fingerprint)
+$keyUrl = "$apiBase/api/v1/me/keys/$fingerprint"
+$rename = @{ name = '工作电脑' } | ConvertTo-Json
+Invoke-RestMethod $keyUrl -Method Patch -ContentType 'application/json' -Headers $headers -Body $rename
+Invoke-RestMethod $keyUrl -Headers $headers
+```
 
 ## Web 联调示例
 
@@ -129,6 +161,8 @@ Content-Type: application/json
 ```
 
 后端检查用户名与该公钥所属账号完全匹配，成功返回与密码登录相同格式的玩家会话。网关凭证与玩家会话不能相互替代。此内部接口信任网关完成签名验证，本身不校验 SSH 签名；不能把它代理成任何人可调用的“提交公钥登录”接口。网关凭证具有代表玩家登录的权限。
+
+SSH 握手包含未签名的公钥探测阶段。这个阶段应在同一接口中传 `verify_only:true`，仅返回 `{"account":{...}}`，不发放令牌、不记录使用时间。签名验证成功后，用默认 verify_only=false 完成正式登录。项目 SSH 网关已将正式登录移至握手完成后的会话阶段。预检查与正式登录各计一次认证预算。
 
 浏览器通过下方挑战流程使用 SSH 密钥登录，无需设置密码。现有 `cmd/hub` 仍使用原来的挑战链路，尚未迁移为独立 API 客户端；两套挑战凭证按用途隔离，不能相互确认或领取。
 

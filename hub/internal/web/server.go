@@ -168,11 +168,15 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	keys := make([]keyView, 0, len(ids))
 	for _, k := range ids {
+		used := "尚未使用"
+		if !k.LastUsed.IsZero() {
+			used = k.LastUsed.Format("2006-01-02 15:04")
+		}
 		keys = append(keys, keyView{
 			Fingerprint: k.Fingerprint,
 			Short:       shortFingerprint(k.Fingerprint),
 			Added:       k.CreatedAt.Format("2006-01-02 15:04"),
-			Used:        k.LastUsed.Format("2006-01-02 15:04"),
+			Used:        used,
 		})
 	}
 	s.render(w, "account", pageData{

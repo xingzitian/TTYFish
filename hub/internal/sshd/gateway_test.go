@@ -41,6 +41,7 @@ func (m *mountModel) Close()                              { close(m.closed) }
 
 type fakeBackend struct {
 	*httptest.Server
+	keyLogins int
 
 	mu       sync.Mutex
 	gateway  string
@@ -93,8 +94,9 @@ func (f *fakeBackend) handleKeyLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Username  string `json:"username"`
-		PublicKey string `json:"public_key"`
+		Username   string `json:"username"`
+		PublicKey  string `json:"public_key"`
+		VerifyOnly bool   `json:"verify_only"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
@@ -105,7 +107,39 @@ func (f *fakeBackend) handleKeyLogin(w http.ResponseWriter, r *http.Request) {
 		unauthorized(w)
 		return
 	}
+	if body.VerifyOnly {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"account": backend.Account{ID: acc.id, Username: acc.username}})
+		return
+	}
+	f.mu.Lock()
+	f.keyLogins++
+	f.mu.Unlock()
 	f.writePlayer(w, acc)
+}
+
+type unsignedProbeSigner struct{ gossh.Signer }
+
+func (unsignedProbeSigner) Sign(io.Reader, []byte) (*gossh.Signature, error) {
+	return nil, io.ErrUnexpectedEOF
+}
+
+func TestUnsignedKeyProbeDoesNotIssuePlayerSession(t *testing.T) {
+	fb := newFakeBackend(t, "gateway-secret")
+	key, keyLine := signer(t)
+	fb.addAccount("acc-1", "alice", "", fingerprintOf(keyLine))
+	addr := startGateway(t, fb, func(registry.UIContext) {})
+	c, err := dial(t, addr, "alice", gossh.PublicKeys(unsignedProbeSigner{key}))
+	if err == nil {
+		c.Close()
+		t.Fatal("unsigned probe unexpectedly authenticated")
+	}
+	fb.mu.Lock()
+	count := fb.keyLogins
+	fb.mu.Unlock()
+	if count != 0 {
+		t.Fatal("unsigned key probe issued a player session")
+	}
 }
 
 func (f *fakeBackend) handlePasswordLogin(w http.ResponseWriter, r *http.Request) {

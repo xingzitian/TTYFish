@@ -160,9 +160,9 @@ func New(cfg Config) (*ssh.Server, error) {
 			return true
 		}),
 
-		// 公钥认证：SSH 握手已经证明对方持有私钥，这里再让后端确认
-		// "这个用户名 + 这把公钥"属于同一个账号，然后换一个玩家令牌。
+		// PublicKeyAuth also handles unsigned probes: preflight only, no session or usage update.
 		wish.WithPublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
+			ctx.SetValue("keySessionMu", &sync.Mutex{})
 			fp := Fingerprint(key)
 			if cfg.Allow != nil && !cfg.Allow(fp) {
 				slog.Warn("拒绝公钥", "user", ctx.User(), "fingerprint", fp, "remote", ctx.RemoteAddr())
@@ -171,7 +171,7 @@ func New(cfg Config) (*ssh.Server, error) {
 			if cfg.Accounts == nil {
 				return false
 			}
-			// SSH 协议会调这个回调两次（探测 + 验签），所以第一次登录成功就缓存，
+			// SSH 协议可能重复询问同一公钥，所以预检查成功就缓存，
 			// 第二次直接复用——否则会白烧一次后端每分钟 10 次的限流预算。
 			cacheKey := ctx.User() + "|" + fp + "|" + ctx.RemoteAddr().String()
 			if p, ok := takeLogin(cacheKey); ok {
@@ -180,14 +180,15 @@ func New(cfg Config) (*ssh.Server, error) {
 			}
 			callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			p, err := cfg.Accounts.LoginKey(callCtx, ctx.User(), strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))))
+			account, err := cfg.Accounts.CheckKey(callCtx, ctx.User(), strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))))
 			if err != nil {
 				slog.Warn("密钥登录失败", "user", ctx.User(), "fingerprint", fp, "err", err)
 				return false
 			}
+			p := backend.Player{Account: account}
 			putLogin(cacheKey, p)
 			storePlayer(ctx, p)
-			slog.Info("密钥登录", "user", ctx.User(), "fingerprint", fp, "account", p.Account.ID)
+			slog.Info("密钥预检查通过", "user", ctx.User(), "fingerprint", fp, "account", p.Account.ID)
 			return true
 		}),
 
@@ -260,8 +261,41 @@ func New(cfg Config) (*ssh.Server, error) {
 				}()
 				return p
 			}, termenv.ANSI256),
+			// Last middleware is outermost: finalize only after the handshake, before UI creation.
+			func(next ssh.Handler) ssh.Handler {
+				return func(s ssh.Session) {
+					if err := finalizeKeySession(s, cfg.Accounts); err != nil {
+						fmt.Fprintf(s, "密钥登录失败：%v\n", err)
+						return
+					}
+					next(s)
+				}
+			},
 		),
 	)
+}
+
+func finalizeKeySession(s ssh.Session, accounts *backend.Client) error {
+	if s.PublicKey() == nil {
+		return nil
+	}
+	mu, _ := s.Context().Value("keySessionMu").(*sync.Mutex)
+	if mu == nil {
+		return fmt.Errorf("密钥认证上下文丢失，请重新连接")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if playerFrom(s.Context()).Token != "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(s.Context(), 10*time.Second)
+	defer cancel()
+	p, err := accounts.LoginKey(ctx, s.User(), strings.TrimSpace(string(gossh.MarshalAuthorizedKey(s.PublicKey()))))
+	if err != nil {
+		return err
+	}
+	storePlayer(s.Context(), p)
+	return nil
 }
 
 // handleAuth 处理 `ssh hub auth <码>`：这是网页登录在终端一侧的确认。

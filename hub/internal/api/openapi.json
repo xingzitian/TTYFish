@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "TTYFish 账号认证 API",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "description": "阶段一账号 API。核心后端独立运行，Web/SSH 通过 HTTP 调用。仅使用 Authorization Bearer，不接受 Cookie。所有响应禁止缓存。注册和密码认证按直连来源 IP 共用每分钟 10 次预算。"
   },
   "servers": [
@@ -1672,14 +1672,21 @@
     "/api/v1/internal/auth/ssh": {
       "post": {
         "operationId": "loginVerifiedSSHKey",
-        "summary": "仅供可信 SSH 网关：完成私钥持有证明后换取玩家会话",
+        "summary": "可信 SSH 网关密钥预检查或认证登录",
         "responses": {
           "200": {
             "description": "玩家会话",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Session"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Session"
+                    },
+                    {
+                      "$ref": "#/components/schemas/KeyCheckResult"
+                    }
+                  ]
                 }
               }
             }
@@ -1790,7 +1797,7 @@
             "gatewayAuth": []
           }
         ],
-        "description": "网关必须先验证真实 SSH 握手签名。此接口不校验签名，不能开放为浏览器的公钥登录入口。网关凭证拥有代表玩家登录的权限，只能保存在受信任服务端。未配置网关凭证时返回 503。"
+        "description": "网关必须先验证真实 SSH 握手签名。此接口不校验签名，不能开放为浏览器的公钥登录入口。网关凭证拥有代表玩家登录的权限，只能保存在受信任服务端。未配置网关凭证时返回 503。 verify_only=true 仅返回 account，无认证副作用。正式登录必须在成功的 SSH 签名验证后调用，返回会话并更新此公钥的 last_used_at。"
       }
     },
     "/api/v1/me": {
@@ -2408,6 +2415,150 @@
             }
           }
         ]
+      },
+      "get": {
+        "operationId": "getKey",
+        "summary": "查询自己的单个公钥及最后使用时间",
+        "parameters": [
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "完整 SHA256 指纹，作为一个路径段 URL 编码"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "公钥信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Key"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "renameKey",
+        "summary": "设置或清除自己的公钥名称",
+        "parameters": [
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "完整 SHA256 指纹，作为一个路径段 URL 编码"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "公钥信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Key"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameKey"
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -3132,130 +3283,130 @@
           "legal"
         ]
       },
-    "SSHChallengeStart": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "username": {
-          "type": "string",
-          "description": "注册时的固定用户名"
-        }
+      "SSHChallengeStart": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "注册时的固定用户名"
+          }
+        },
+        "required": [
+          "username"
+        ]
       },
-      "required": [
-        "username"
-      ]
-    },
-    "SSHChallenge": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "username": {
-          "type": "string"
-        },
-        "code": {
-          "type": "string",
-          "pattern": "^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$",
-          "description": "一次性终端确认码，与浏览器查询凭证不同"
-        },
-        "poll_token": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$",
-          "description": "高熵浏览器凭证，不要传给 SSH 网关"
-        },
-        "expires_in": {
-          "type": "integer",
-          "enum": [
-            90
-          ]
-        },
-        "poll_interval_ms": {
-          "type": "integer",
-          "enum": [
-            1500
-          ]
-        }
-      },
-      "required": [
-        "username",
-        "code",
-        "poll_token",
-        "expires_in",
-        "poll_interval_ms"
-      ]
-    },
-    "SSHChallengePoll": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "poll_token": {
-          "type": "string",
-          "pattern": "^[a-f0-9]{64}$"
-        }
-      },
-      "required": [
-        "poll_token"
-      ]
-    },
-    "SSHChallengeConfirm": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "username": {
-          "type": "string"
-        },
-        "public_key": {
-          "type": "string"
-        },
-        "code": {
-          "type": "string",
-          "description": "网页显示的一次性确认码"
-        }
-      },
-      "required": [
-        "username",
-        "public_key",
-        "code"
-      ]
-    },
-    "SSHChallengeResult": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "state": {
-              "type": "string",
-              "enum": [
-                "pending",
-                "expired"
-              ]
-            }
+      "SSHChallenge": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "username": {
+            "type": "string"
           },
-          "required": [
-            "state"
-          ]
+          "code": {
+            "type": "string",
+            "pattern": "^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$",
+            "description": "一次性终端确认码，与浏览器查询凭证不同"
+          },
+          "poll_token": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "description": "高熵浏览器凭证，不要传给 SSH 网关"
+          },
+          "expires_in": {
+            "type": "integer",
+            "enum": [
+              90
+            ]
+          },
+          "poll_interval_ms": {
+            "type": "integer",
+            "enum": [
+              1500
+            ]
+          }
         },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "state": {
-              "type": "string",
-              "enum": [
-                "ok"
-              ]
+        "required": [
+          "username",
+          "code",
+          "poll_token",
+          "expires_in",
+          "poll_interval_ms"
+        ]
+      },
+      "SSHChallengePoll": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "poll_token": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "poll_token"
+        ]
+      },
+      "SSHChallengeConfirm": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "username": {
+            "type": "string"
+          },
+          "public_key": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "网页显示的一次性确认码"
+          }
+        },
+        "required": [
+          "username",
+          "public_key",
+          "code"
+        ]
+      },
+      "SSHChallengeResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "expired"
+                ]
+              }
             },
-            "session": {
-              "$ref": "#/components/schemas/Session"
-            }
+            "required": [
+              "state"
+            ]
           },
-          "required": [
-            "state",
-            "session"
-          ]
-        }
-      ]
-    },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "ok"
+                ]
+              },
+              "session": {
+                "$ref": "#/components/schemas/Session"
+              }
+            },
+            "required": [
+              "state",
+              "session"
+            ]
+          }
+        ]
+      },
       "Account": {
         "type": "object",
         "additionalProperties": false,
@@ -3325,12 +3476,25 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "用户设置的密钥名称；可为空，不要求唯一"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "最近成功使用此密钥认证的时间，未使用为 null；改名和重复添加不更新"
           }
         },
         "required": [
           "fingerprint",
           "public_key",
-          "created_at"
+          "created_at",
+          "name",
+          "last_used_at"
         ]
       },
       "Registration": {
@@ -3349,6 +3513,11 @@
           "public_key": {
             "type": "string",
             "description": "可选，单个 OpenSSH 公钥；密码和公钥至少提供一项"
+          },
+          "key_name": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "注册公钥的可选名称，非空时必须同时提供 public_key"
           }
         },
         "required": [
@@ -3380,6 +3549,11 @@
           },
           "public_key": {
             "type": "string"
+          },
+          "verify_only": {
+            "type": "boolean",
+            "default": false,
+            "description": "SSH 公钥探测预检查。true 时只校验归属并返回 account，不发放会话，不更新使用时间。默认 false 只能在签名验证成功后调用。"
           }
         },
         "required": [
@@ -3407,6 +3581,11 @@
           "public_key": {
             "type": "string",
             "description": "一把 OpenSSH 公钥，不允许证书、authorized_keys 选项或多把公钥"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "可选；省略时保留已有名称，空字符串清除名称"
           }
         },
         "required": [
@@ -3459,6 +3638,32 @@
         },
         "required": [
           "error"
+        ]
+      },
+      "KeyCheckResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Account"
+          }
+        },
+        "required": [
+          "account"
+        ]
+      },
+      "RenameKey": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "去除首尾空白后最多 64 个 Unicode 字符，不允许控制字符；空字符串清除名称"
+          }
+        },
+        "required": [
+          "name"
         ]
       }
     }

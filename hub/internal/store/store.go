@@ -36,6 +36,7 @@ type Account struct {
 
 // Identity 是一把挂在账号下的公钥。
 type Identity struct {
+	Name        string
 	Fingerprint string
 	AccountID   string
 	PublicKey   string
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS identities (
   fingerprint  TEXT PRIMARY KEY,
   account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   public_key   TEXT NOT NULL,
+  name         TEXT NOT NULL DEFAULT '',
   kind         TEXT NOT NULL DEFAULT 'ssh',
   created_at   INTEGER NOT NULL,
   last_used_at INTEGER NOT NULL
@@ -103,6 +105,10 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("建表: %w", err)
+	}
+	if err := migrateKeyNames(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("升级公钥元数据: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -193,7 +199,7 @@ func (s *Store) ByID(id string) (Account, bool, error) {
 // Identities 列出账号下的所有公钥。
 func (s *Store) Identities(accountID string) ([]Identity, error) {
 	rows, err := s.db.Query(
-		`SELECT fingerprint, account_id, public_key, kind, created_at, last_used_at
+		`SELECT fingerprint, account_id, public_key, kind, created_at, last_used_at, name
 		   FROM identities WHERE account_id = ? ORDER BY created_at`, accountID)
 	if err != nil {
 		return nil, err
@@ -204,11 +210,13 @@ func (s *Store) Identities(accountID string) ([]Identity, error) {
 	for rows.Next() {
 		var it Identity
 		var created, used int64
-		if err := rows.Scan(&it.Fingerprint, &it.AccountID, &it.PublicKey, &it.Kind, &created, &used); err != nil {
+		if err := rows.Scan(&it.Fingerprint, &it.AccountID, &it.PublicKey, &it.Kind, &created, &used, &it.Name); err != nil {
 			return nil, err
 		}
 		it.CreatedAt = time.UnixMilli(created)
-		it.LastUsed = time.UnixMilli(used)
+		if used > 0 {
+			it.LastUsed = time.UnixMilli(used)
+		}
 		out = append(out, it)
 	}
 	return out, rows.Err()
@@ -216,26 +224,7 @@ func (s *Store) Identities(accountID string) ([]Identity, error) {
 
 // Link 把一把公钥挂到已有账号上。
 func (s *Store) Link(accountID, fp, publicKey string) error {
-	if a, ok, err := s.ByFingerprint(fp); err != nil {
-		return err
-	} else if ok && a.ID != accountID {
-		return ErrConflict
-	}
-	now := time.Now()
-	result, err := s.db.Exec(
-		`INSERT INTO identities(fingerprint, account_id, public_key, kind, created_at, last_used_at)
-		 VALUES(?,?,?,?,?,?)
-		 ON CONFLICT(fingerprint) DO UPDATE SET last_used_at = excluded.last_used_at WHERE identities.account_id = excluded.account_id`,
-		fp, accountID, publicKey, "ssh", now.UnixMilli(), now.UnixMilli(),
-	)
-	if err != nil {
-		return accountWriteError(err)
-	}
-	n, err := result.RowsAffected()
-	if err == nil && n == 0 {
-		return ErrConflict
-	}
-	return err
+	return s.LinkNamed(accountID, fp, publicKey, nil)
 }
 
 // Unlink 摘掉一把公钥。不允许摘掉最后一把——那样人就再也进不来了。

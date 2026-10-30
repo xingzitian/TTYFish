@@ -70,6 +70,27 @@ func (c *Client) LoginKey(ctx context.Context, username, publicKey string) (Play
 	return c.playerCall(ctx, "/api/v1/internal/auth/ssh", body, true)
 }
 
+// CheckKey checks key ownership without issuing a token or recording key usage.
+func (c *Client) CheckKey(ctx context.Context, username, publicKey string) (Account, error) {
+	status, raw, err := c.do(ctx, http.MethodPost, "/api/v1/internal/auth/ssh", map[string]any{"username": username, "public_key": publicKey, "verify_only": true}, true)
+	if err != nil {
+		return Account{}, err
+	}
+	if status != http.StatusOK {
+		return Account{}, apiError(status, raw)
+	}
+	var result struct {
+		Account Account `json:"account"`
+	}
+	if err = json.Unmarshal(raw, &result); err != nil {
+		return Account{}, err
+	}
+	if result.Account.ID == "" {
+		return Account{}, fmt.Errorf("后端没有返回账号")
+	}
+	return result.Account, nil
+}
+
 // LoginPassword 用用户名密码换玩家令牌。
 func (c *Client) LoginPassword(ctx context.Context, username, password string) (Player, error) {
 	body := map[string]string{"username": username, "password": password}

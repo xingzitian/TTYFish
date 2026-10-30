@@ -55,6 +55,8 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 	s.mux.HandleFunc("GET /api/v1/me/keys", s.keys)
 	s.mux.HandleFunc("POST /api/v1/me/keys", s.addKey)
 	s.mux.HandleFunc("DELETE /api/v1/me/keys/{fingerprint}", s.deleteKey)
+	s.mux.HandleFunc("GET /api/v1/me/keys/{fingerprint}", s.getKey)
+	s.mux.HandleFunc("PATCH /api/v1/me/keys/{fingerprint}", s.renameKey)
 	s.registerRoomRoutes()
 	return s, nil
 }
@@ -78,7 +80,7 @@ func (s *Server) Handler() http.Handler {
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 				w.WriteHeader(http.StatusNoContent)
 				return
@@ -99,7 +101,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func isPath(mux *http.ServeMux, r *http.Request) bool {
-	for _, method := range []string{"GET", "POST", "PUT", "DELETE"} {
+	for _, method := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
 		copy := r.Clone(r.Context())
 		copy.Method = method
 		_, p := mux.Handler(copy)
@@ -115,12 +117,14 @@ type credentials struct {
 	Password string `json:"password"`
 }
 type registration struct {
+	KeyName   string `json:"key_name,omitempty"`
 	Username  string `json:"username"`
 	Password  string `json:"password,omitempty"`
 	PublicKey string `json:"public_key,omitempty"`
 }
 type keyRequest struct {
-	PublicKey string `json:"public_key"`
+	Name      *string `json:"name,omitempty"`
+	PublicKey string  `json:"public_key"`
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -178,7 +182,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	a, err := s.accounts.Register(body.Username, body.Password, body.PublicKey)
+	a, err := s.accounts.Register(body.Username, body.Password, body.PublicKey, body.KeyName)
 	if err != nil {
 		report(w, err)
 		return
@@ -220,10 +224,20 @@ func (s *Server) keyLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Username  string `json:"username"`
-		PublicKey string `json:"public_key"`
+		Username   string `json:"username"`
+		PublicKey  string `json:"public_key"`
+		VerifyOnly bool   `json:"verify_only,omitempty"`
 	}
 	if !decode(w, r, &body) {
+		return
+	}
+	if body.VerifyOnly {
+		a, err := s.accounts.CheckKey(body.Username, body.PublicKey)
+		if err != nil {
+			report(w, err)
+			return
+		}
+		respond(w, 200, map[string]any{"account": a})
 		return
 	}
 	session, err := s.accounts.LoginVerifiedKey(body.Username, body.PublicKey)
@@ -289,7 +303,11 @@ func (s *Server) addKey(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	key, err := s.accounts.AddKey(a.ID, body.PublicKey)
+	var names []string
+	if body.Name != nil {
+		names = []string{*body.Name}
+	}
+	key, err := s.accounts.AddKey(a.ID, body.PublicKey, names...)
 	if err != nil {
 		report(w, err)
 		return

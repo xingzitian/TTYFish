@@ -58,6 +58,10 @@ func (s *Store) allowAttempt(remote, namespace string, limit int) bool {
 
 // Register reserves an exact, immutable username. It never renames on collision.
 func (s *Store) Register(handle, password, fp, publicKey string) (Account, error) {
+	return s.RegisterNamed(handle, password, fp, publicKey, "")
+}
+
+func (s *Store) RegisterNamed(handle, password, fp, publicKey, name string) (Account, error) {
 	if !handlePattern.MatchString(handle) {
 		return Account{}, fmt.Errorf("用户名须为 3–20 位小写字母、数字、下划线或短横线，以字母开头")
 	}
@@ -78,7 +82,7 @@ func (s *Store) Register(handle, password, fp, publicKey string) (Account, error
 		return Account{}, accountWriteError(err)
 	}
 	if fp != "" {
-		if _, err = tx.Exec(`INSERT INTO identities(fingerprint,account_id,public_key,created_at,last_used_at) VALUES(?,?,?,?,?)`, fp, a.ID, publicKey, a.CreatedAt.UnixMilli(), a.CreatedAt.UnixMilli()); err != nil {
+		if _, err = tx.Exec(`INSERT INTO identities(fingerprint,account_id,public_key,name,created_at,last_used_at) VALUES(?,?,?,?,?,0)`, fp, a.ID, publicKey, name, a.CreatedAt.UnixMilli()); err != nil {
 			return Account{}, accountWriteError(err)
 		}
 	}
