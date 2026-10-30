@@ -1,25 +1,25 @@
-name: Deploy
+name: Release
 
-# 只在打 tag 时部署。线上随时有人在打牌，重启会把所有 SSH 会话踢掉，
-# 所以发布必须是一个明确动作，而不是"推了代码就自动上"。
+# 打 tag 时构建并发布一个 GitHub Release，把二进制作为 release asset 挂上去。
+# 服务器上用 deploy/update.sh 轮询最新 tag，直接下载这个资产——不跨境传文件、
+# 不在生产机上编译，也不需要往仓库里存任何私钥。
 on:
   push:
     tags:
       - 'v*'
-  workflow_dispatch: # 也可以手动点一下（默认用 main 最新代码）
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # 建 release 需要
 
 concurrency:
-  group: deploy
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: 部署到生产
+  release:
+    name: 构建并发布 ${{ github.ref_name }}
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v4
 
@@ -35,94 +35,31 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
+          mkdir -p ../dist
           go build -trimpath -ldflags "-s -w" -o ../dist/hub-linux-amd64 ./cmd/hub
           file ../dist/hub-linux-amd64
-          sha256sum ../dist/hub-linux-amd64
+          ( cd ../dist && sha256sum hub-linux-amd64 > hub-linux-amd64.sha256 )
+          cat ../dist/hub-linux-amd64.sha256
 
-      - name: 上传并切换
+      # 资产名必须固定，服务器靠固定 URL 下载：
+      # https://github.com/<owner>/<repo>/releases/download/<tag>/hub-linux-amd64
+      - name: 发布 Release
         env:
-          # 私钥存在仓库 secret TTYFISH_DEPLOY 里。
-          # 主机、用户、端口不是秘密，直接写在 workflow 里。
-          SSH_KEY: ${{ secrets.TTYFISH_DEPLOY }}
-          HOST: 159.75.78.7
-          USER: deploy
-          PORT: '22'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          PORT="${PORT:-22}"
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-
-          # 从 secret 里还原私钥：先去掉 Windows 粘贴时混进来的 \r，
-          # 再保证结尾正好一个换行——ssh 对这两点都很敏感。
-          printf '%s' "$SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
-          printf '\n' >> ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-
-          # 私钥坏了就在这里失败，并说清楚坏在哪（不打印私钥本身）
-          if ! ssh-keygen -lf ~/.ssh/deploy_key; then
-            echo "::error::secret TTYFISH_DEPLOY 不是可用的私钥（长度 ${#SSH_KEY} 字节）"
-            head -c 40 ~/.ssh/deploy_key | sed 's/./& /g' || true
-            exit 1
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release 已存在，补传资产"
+            gh release upload "$TAG" dist/hub-linux-amd64 dist/hub-linux-amd64.sha256 --clobber
+          else
+            gh release create "$TAG" \
+              dist/hub-linux-amd64 dist/hub-linux-amd64.sha256 \
+              --title "$TAG" \
+              --generate-notes
           fi
 
-          # 固定 host key，避免首次连接交互；也避免被中间人顶替
-          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-
-          # 注意：ssh 用 -p 指定端口，scp 用大写 -P。写成一样会把端口当成文件路径。
-          SSH_OPTS="-i $HOME/.ssh/deploy_key -p $PORT -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15"
-          SCP_OPTS="-i $HOME/.ssh/deploy_key -P $PORT -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15"
-          echo "--- 先测一次连接 ---"
-          ssh $SSH_OPTS "$USER@$HOST" 'echo 连接正常: $(id -un)' || {
-            echo "::error::SSH 连不上，检查 deploy 用户和公钥"
-            ssh -vv $SSH_OPTS "$USER@$HOST" true 2>&1 | grep -E "Offering|Authentications|Permission|identity file" | head -10
-            exit 1
-          }
-          scp $SCP_OPTS dist/hub-linux-amd64 "$USER@$HOST:/opt/ttyfish/hub.new"
-
-          ssh $SSH_OPTS "$USER@$HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
-          cd /opt/ttyfish
-          chmod +x hub.new
-          echo "新版本: $(sha256sum hub.new | cut -d' ' -f1)"
-
-          # 有人在游戏里就别重启——那会把正在打的人踢掉。
-          ACTIVE=$(ss -Htn state established '( sport = :12331 )' 2>/dev/null | wc -l)
-          if [ "$ACTIVE" -gt 0 ]; then
-            echo "::error::现在有 $ACTIVE 个连接在 12331 上，有人在玩，跳过这次部署"
-            rm -f hub.new
-            exit 1
-          fi
-
-          [ -f hub ] && cp -p hub hub.prev
-
-          # 同一个文件系统内 mv 是原子的：不会出现"半个二进制"的窗口
-          mv hub.new hub
-
-          sudo -n systemctl restart ttyfish
-
-          for i in 1 2 3 4 5; do
-            if curl -sf --max-time 3 http://127.0.0.1:12332/healthz >/dev/null; then
-              echo "健康检查通过（第 $i 次）"
-              exit 0
-            fi
-            sleep 1
-          done
-
-          echo "::error::健康检查失败，回滚到上一版"
-          if [ -f hub.prev ]; then
-            mv hub.prev hub
-            sudo -n systemctl restart ttyfish
-          fi
-          exit 1
-          REMOTE
-
-      - name: 部署后验证
+      - name: 校验资产
         env:
-          HOST: 159.75.78.7
-          USER: deploy
-          PORT: '22'
-        run: |
-          set -euo pipefail
-          PORT="${PORT:-22}"
-          SSH_OPTS="-i $HOME/.ssh/deploy_key -p $PORT -o IdentitiesOnly=yes -o BatchMode=yes"
-          ssh $SSH_OPTS "$USER@$HOST" 'systemctl is-active ttyfish; curl -s --max-time 3 http://127.0.0.1:12332/healthz; echo'
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release view "${{ github.ref_name }}" --json assets --jq '.assets[].name'

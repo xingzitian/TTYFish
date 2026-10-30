@@ -1,0 +1,11 @@
+[Unit]
+Description=每分钟检查一次 TTYFish 新版本
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=15s
+Unit=ttyfish-update.service
+
+[Install]
+WantedBy=timers.target
