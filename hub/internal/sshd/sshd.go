@@ -81,15 +81,8 @@ func Fingerprint(k ssh.PublicKey) string {
 	return "SHA256:" + base64.RawStdEncoding.EncodeToString(sum[:])
 }
 
-// Identity 是玩家身份：只看公钥指纹。
-//
-// 用户名不参与身份，它只是牌桌上的昵称。原因很实际：确认身份这件事，
-// 用户唯一稳定拥有的是那把私钥。把用户名并进来，会出现"我换了个 ssh
-// 用户名就回不到自己座位、牌局又已经开了所以进不去"的死角。
-//
-// 代价：几个人如果共用同一个密钥，服务端没法区分，互相会顶号。
-// 这种情况请每人用自己的密钥（`ssh-keygen` 各自生成一份），
-// 而不是靠改用户名。
+// Identity 返回密钥身份，供无账号库的纯游戏模式使用。
+// 启用账号库时，游戏身份使用 account:<id>，与登录凭证无关。
 func Identity(k ssh.PublicKey) string {
 	return Fingerprint(k)
 }
@@ -156,13 +149,42 @@ func New(cfg Config) (*ssh.Server, error) {
 		wish.WithHostKeyPath(cfg.HostKeyPath),
 		wish.WithIdleTimeout(cfg.IdleTimeout),
 		wish.WithVersion("TTYFish"),
+		wish.WithBannerHandler(func(ctx ssh.Context) string {
+			if cfg.Store == nil {
+				return ""
+			}
+			if _, ok, _ := cfg.Store.ByHandle(ctx.User()); !ok {
+				return "账号错误：请先在网页注册，并使用注册时的固定用户名。\n"
+			}
+			return "请使用此账号绑定的 SSH 密钥或账号密码；用户名与密钥不匹配时无法登录。\n"
+		}),
+		wish.WithPasswordAuth(func(ctx ssh.Context, password string) bool {
+			if cfg.Store == nil {
+				return false
+			}
+			if !cfg.Store.AllowPasswordAttempt(ctx.RemoteAddr().String()) {
+				return false
+			}
+			a, ok := cfg.Store.AuthenticatePassword(ctx.User(), password)
+			if ok {
+				ctx.SetValue("accountID", a.ID)
+			}
+			return ok
+		}),
 
-		// 只认公钥：既是安全边界，也是"你是谁"的来源之一。
+		// 账号模式要求用户名与公钥所属账号完全一致。
 		wish.WithPublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
 			fp := Fingerprint(key)
 			if cfg.Allow != nil && !cfg.Allow(fp) {
 				slog.Warn("拒绝公钥", "user", ctx.User(), "fingerprint", fp, "remote", ctx.RemoteAddr())
 				return false
+			}
+			if cfg.Store != nil {
+				a, ok, err := cfg.Store.ByFingerprint(fp)
+				if err != nil || !ok || a.Handle != ctx.User() {
+					return false
+				}
+				ctx.SetValue("accountID", a.ID)
 			}
 			slog.Info("登录", "user", ctx.User(), "fingerprint", fp, "remote", ctx.RemoteAddr())
 			return true
@@ -210,6 +232,13 @@ func New(cfg Config) (*ssh.Server, error) {
 				}
 
 				fp := Identity(s.PublicKey())
+				if cfg.Store != nil {
+					id, ok := s.Context().Value("accountID").(string)
+					if !ok || id == "" {
+						return nil
+					}
+					fp = "account:" + id
+				}
 				conn := session.New(reg, fp, s.User())
 				conn.Resume() // 断线重连：这个身份还在房间里就直接回去
 
@@ -258,32 +287,18 @@ func handleAuth(s ssh.Session, st *store.Store) bool {
 	}
 
 	code := strings.ToUpper(fields[1])
+	if s.PublicKey() == nil {
+		fmt.Fprintln(s, "此命令需要 SSH 公钥认证；密码登录请直接连接游戏或在网页输入密码。")
+		return true
+	}
 	fp := Identity(s.PublicKey())
-	pub := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(s.PublicKey())))
-
-	purpose, target, err := st.Confirm(code, fp)
+	_, _, err := st.ConfirmAccount(code, fp, s.User())
 	if err != nil {
 		slog.Warn("挑战确认失败", "fingerprint", fp, "err", err)
 		fmt.Fprintf(s, "确认失败：%v\n", err)
 		return true
 	}
 
-	switch purpose {
-	case "link":
-		if err := st.Link(target, fp, pub); err != nil {
-			fmt.Fprintf(s, "绑定公钥失败：%v\n", err)
-			return true
-		}
-		slog.Info("绑定公钥", "fingerprint", fp, "account", target)
-		fmt.Fprintln(s, "已把这把公钥绑定到你的账号，回浏览器继续。")
-	default:
-		acc, err := st.EnsureAccount(fp, pub, s.User())
-		if err != nil {
-			fmt.Fprintf(s, "登录失败：%v\n", err)
-			return true
-		}
-		slog.Info("网页登录", "fingerprint", fp, "account", acc.ID, "handle", acc.Handle)
-		fmt.Fprintf(s, "登录成功，欢迎 @%s\n回浏览器继续。\n", acc.Handle)
-	}
+	fmt.Fprintf(s, "登录成功，欢迎 @%s\n回浏览器继续。\n", s.User())
 	return true
 }

@@ -43,10 +43,13 @@ func TestLoginPageRenders(t *testing.T) {
 // 浏览器发起 → 拿到短码 → 终端确认 → 浏览器轮询拿到会话。
 func TestChallengeLoginEndToEnd(t *testing.T) {
 	s, st := newTestServer(t)
+	if _, err := st.Register("alice", "", "SHA256:endtoend", "test-key"); err != nil {
+		t.Fatal(err)
+	}
 	h := s.Handler()
 
 	// 1. 浏览器发起
-	req := httptest.NewRequest("POST", "/auth/start", nil)
+	req := httptest.NewRequest("POST", "/auth/start?username=alice", nil)
 	req.Header.Set("Origin", "http://example.com")
 	req.Host = "example.com"
 	w := httptest.NewRecorder()
@@ -106,7 +109,10 @@ func TestChallengeLoginEndToEnd(t *testing.T) {
 // TestShortCodeIsSingleUse 同一个码不能登两次。
 func TestShortCodeIsSingleUse(t *testing.T) {
 	s, st := newTestServer(t)
-	req := httptest.NewRequest("POST", "/auth/start", nil)
+	if _, err := st.Register("alice", "", "fp1", "test-key"); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/auth/start?username=alice", nil)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 	code, poll := extractCode(t, w.Body.String())

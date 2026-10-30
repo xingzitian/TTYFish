@@ -39,7 +39,7 @@ func main() {
 	match := flag.Int("match", 0, "长局目标分；0 表示只打一局")
 	botDelay := flag.Duration("bot-delay", 800*time.Millisecond, "电脑思考时间")
 	idle := flag.Duration("idle-timeout", 30*time.Minute, "空闲连接超时")
-	sshHint := flag.String("ssh-hint", "hub 你的服务器", "网页上显示的 ssh 连接提示")
+	sshHint := flag.String("ssh-hint", "-p 2222 play@127.0.0.1", "网页登录的 SSH 连接参数；部署时设置为玩家可访问的地址，例如 -p 2222 play@game.example.com")
 	flag.Parse()
 
 	mode, ok := ui.ParseColorMode(*color)

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -20,7 +21,9 @@ import (
 
 // Store 是数据库句柄。
 type Store struct {
-	db *sql.DB
+	db        *sql.DB
+	attemptMu sync.Mutex
+	attempts  map[string]loginAttempts
 }
 
 // Account 是一个账号。账号 ID 和公钥是分开的：换钥匙不该丢账号。
@@ -42,6 +45,10 @@ type Identity struct {
 }
 
 const schema = `
+CREATE TABLE IF NOT EXISTS passwords (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  digest TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS accounts (
   id         TEXT PRIMARY KEY,
   handle     TEXT NOT NULL UNIQUE,
@@ -209,11 +216,16 @@ func (s *Store) Identities(accountID string) ([]Identity, error) {
 
 // Link 把一把公钥挂到已有账号上。
 func (s *Store) Link(accountID, fp, publicKey string) error {
+	if a, ok, err := s.ByFingerprint(fp); err != nil {
+		return err
+	} else if ok && a.ID != accountID {
+		return fmt.Errorf("公钥已绑定其他账号")
+	}
 	now := time.Now()
 	_, err := s.db.Exec(
 		`INSERT INTO identities(fingerprint, account_id, public_key, kind, created_at, last_used_at)
 		 VALUES(?,?,?,?,?,?)
-		 ON CONFLICT(fingerprint) DO UPDATE SET account_id = excluded.account_id, last_used_at = excluded.last_used_at`,
+		 ON CONFLICT(fingerprint) DO UPDATE SET last_used_at = excluded.last_used_at WHERE identities.account_id = excluded.account_id`,
 		fp, accountID, publicKey, "ssh", now.UnixMilli(), now.UnixMilli(),
 	)
 	return err
@@ -361,10 +373,18 @@ func (s *Store) Confirm(code, fp string) (purpose, accountID string, err error) 
 	if time.Now().UnixMilli() > expires {
 		return "", "", fmt.Errorf("这个码过期了，回网页刷新一下")
 	}
-	_, err = s.db.Exec(
-		`UPDATE challenges SET state = 'confirmed', confirmed_fp = ? WHERE code_hash = ?`,
-		fp, hash(code),
+	result, err := s.db.Exec(
+		`UPDATE challenges SET state = 'confirmed', confirmed_fp = ? WHERE code_hash = ? AND state = 'pending' AND expires_at >= ?`,
+		fp, hash(code), time.Now().UnixMilli(),
 	)
+	if err == nil {
+		n, e := result.RowsAffected()
+		if e != nil {
+			err = e
+		} else if n != 1 {
+			err = fmt.Errorf("验证码已使用或过期")
+		}
+	}
 	return purpose, accountID, err
 }
 

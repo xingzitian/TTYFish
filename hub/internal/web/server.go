@@ -1,7 +1,6 @@
 // Package web 是平台的 HTTP 部分：登录页、账号页、挑战轮询。
 //
-// 登录方式只有一种：浏览器拿一个短码，用户去终端执行 `ssh hub auth <码>`，
-// 浏览器轮询到确认后拿到会话 cookie。没有密码、没有邮箱。
+// 用户先注册固定用户名，再通过 SSH 密钥挑战或账号密码登录。
 package web
 
 import (
@@ -29,7 +28,7 @@ type Server struct {
 	sshHost string // 显示"ssh 谁@哪台机器"用的提示
 }
 
-// New 组装路由。sshHint 是给用户看的连接提示，比如 "hub 你的服务器"。
+// New 组装路由。sshHint 是 SSH 参数，例如 "-p 2222 play@localhost"。
 func New(st *store.Store, sshHint string) *Server {
 	s := &Server{
 		store:   st,
@@ -39,8 +38,10 @@ func New(st *store.Store, sshHint string) *Server {
 	}
 	s.mux.HandleFunc("/", s.handleIndex)
 	s.mux.HandleFunc("/auth/start", s.handleStart)
+	for _, path := range []string{"/register", "/auth/password", "/account/password", "/account/key"} {
+		s.mux.HandleFunc(path, s.handleCredentials)
+	}
 	s.mux.HandleFunc("/auth/poll", s.handlePoll)
-	s.mux.HandleFunc("/auth/link", s.handleLink)
 	s.mux.HandleFunc("/account", s.handleAccount)
 	s.mux.HandleFunc("/logout", s.handleLogout)
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +97,12 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "跨站请求被拒", http.StatusForbidden)
 		return
 	}
-	c, err := s.store.NewChallenge("login", "", challengeTTL)
+	a, ok, err := s.store.ByHandle(r.FormValue("username"))
+	if err != nil || !ok {
+		http.Error(w, "账号错误，请先注册并填写固定用户名", http.StatusBadRequest)
+		return
+	}
+	c, err := s.store.NewChallenge("login", a.ID, challengeTTL)
 	if err != nil {
 		slog.Error("发挑战失败", "err", err)
 		http.Error(w, "服务器开小差了", http.StatusInternalServerError)
@@ -104,7 +110,8 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, "waiting", pageData{
 		Title:   "等待终端确认",
-		SSHHint: s.sshHost,
+		SSHHint: s.sshHint(a.Handle),
+		Handle:  a.Handle,
 		Code:    c.Code,
 		Poll:    c.Poll,
 	})
@@ -131,18 +138,11 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 确认过了：按 purpose 收尾。
-	// login → 找到/建账号；link 在终端那边已经挂好了。
-	acc, err := s.store.EnsureAccount(fp, "", "")
-	if err != nil {
-		http.Error(w, "建号失败", http.StatusInternalServerError)
+	// 仅向挑战所属账号发放会话，不再自动注册。
+	acc, found, err := s.store.ByFingerprint(fp)
+	if err != nil || !found || acc.ID != accountID {
+		http.Error(w, "账号与公钥不匹配", http.StatusForbidden)
 		return
-	}
-	if accountID != "" {
-		// link 场景：终端确认时已经把公钥挂到目标账号上了。
-		if a, ok, _ := s.store.ByID(accountID); ok {
-			acc = a
-		}
 	}
 
 	token, err := s.store.NewSession(acc.ID, r.UserAgent(), sessionTTL)
@@ -153,35 +153,6 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	s.setCookie(w, token)
 	_ = s.store.Consume(poll)
 	writeJSON(w, map[string]any{"state": "ok", "next": "/account"})
-}
-
-// handleLink 已登录用户想再挂一把公钥。
-func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
-	acc, ok := s.current(r)
-	if !ok {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "用 POST", http.StatusMethodNotAllowed)
-		return
-	}
-	if !sameOrigin(r) {
-		http.Error(w, "跨站请求被拒", http.StatusForbidden)
-		return
-	}
-	c, err := s.store.NewChallenge("link", acc.ID, challengeTTL)
-	if err != nil {
-		http.Error(w, "发挑战失败", http.StatusInternalServerError)
-		return
-	}
-	s.render(w, "waiting", pageData{
-		Title:   "添加公钥",
-		Handle:  acc.Handle,
-		SSHHint: s.sshHost,
-		Code:    c.Code,
-		Poll:    c.Poll,
-	})
 }
 
 func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
@@ -205,9 +176,10 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	s.render(w, "account", pageData{
-		Title:  "我的账号",
-		Handle: acc.Handle,
-		Keys:   keys,
+		Title:   "我的账号",
+		Handle:  acc.Handle,
+		SSHHint: s.sshHint(acc.Handle),
+		Keys:    keys,
 	})
 }
 
