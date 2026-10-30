@@ -5,19 +5,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/xingzitian/TTYFish/hub/internal/sshd"
-	"golang.org/x/crypto/ssh"
+	"github.com/xingzitian/TTYFish/hub/internal/account"
 )
 
 func publicKey(text string) (string, string, error) {
-	if strings.TrimSpace(text) == "" {
-		return "", "", nil
-	}
-	key, _, _, rest, err := ssh.ParseAuthorizedKey([]byte(text))
-	if err != nil || strings.TrimSpace(string(rest)) != "" {
-		return "", "", fmt.Errorf("请粘贴一把完整的 SSH 公钥（.pub 文件内容），不要上传私钥")
-	}
-	return sshd.Fingerprint(key), strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))), nil
+	return account.ParsePublicKey(text)
 }
 
 func (s *Server) handleCredentials(w http.ResponseWriter, r *http.Request) {

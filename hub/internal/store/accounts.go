@@ -66,11 +66,11 @@ func (s *Store) Register(handle, password, fp, publicKey string) (Account, error
 	defer tx.Rollback()
 	a := Account{ID: randomID(), Handle: handle, Display: handle, CreatedAt: time.Now()}
 	if _, err = tx.Exec(`INSERT INTO accounts(id,handle,display,created_at) VALUES(?,?,?,?)`, a.ID, a.Handle, a.Display, a.CreatedAt.UnixMilli()); err != nil {
-		return Account{}, fmt.Errorf("用户名已被使用或注册失败")
+		return Account{}, accountWriteError(err)
 	}
 	if fp != "" {
 		if _, err = tx.Exec(`INSERT INTO identities(fingerprint,account_id,public_key,created_at,last_used_at) VALUES(?,?,?,?,?)`, fp, a.ID, publicKey, a.CreatedAt.UnixMilli(), a.CreatedAt.UnixMilli()); err != nil {
-			return Account{}, fmt.Errorf("公钥已绑定其他账号或保存失败")
+			return Account{}, accountWriteError(err)
 		}
 	}
 	if digest != "" {

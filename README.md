@@ -6,6 +6,8 @@
 
 玩家先在网页注册固定用户名，再通过 SSH 密钥或可选的账号密码登录。注册、部署及测试步骤见 [账号说明](docs/ACCOUNTS.md)。
 
+独立核心后端已提供账号认证 API：运行 `cd hub`、`go run ./cmd/backend`，默认监听 `127.0.0.1:8081`。分工边界、接口与联调示例见 [后端 API](docs/BACKEND_API.md)，机器可读契约位于 `/api/openapi.json`。
+
 ```
 ssh -p 2222 你的名字@你的服务器
 ```

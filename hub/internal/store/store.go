@@ -219,15 +219,22 @@ func (s *Store) Link(accountID, fp, publicKey string) error {
 	if a, ok, err := s.ByFingerprint(fp); err != nil {
 		return err
 	} else if ok && a.ID != accountID {
-		return fmt.Errorf("公钥已绑定其他账号")
+		return ErrConflict
 	}
 	now := time.Now()
-	_, err := s.db.Exec(
+	result, err := s.db.Exec(
 		`INSERT INTO identities(fingerprint, account_id, public_key, kind, created_at, last_used_at)
 		 VALUES(?,?,?,?,?,?)
 		 ON CONFLICT(fingerprint) DO UPDATE SET last_used_at = excluded.last_used_at WHERE identities.account_id = excluded.account_id`,
 		fp, accountID, publicKey, "ssh", now.UnixMilli(), now.UnixMilli(),
 	)
+	if err != nil {
+		return accountWriteError(err)
+	}
+	n, err := result.RowsAffected()
+	if err == nil && n == 0 {
+		return ErrConflict
+	}
 	return err
 }
 

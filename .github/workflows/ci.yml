@@ -103,15 +103,21 @@ jobs:
           CGO_ENABLED: '0' # 成立的前提是 SQLite 用纯 Go 驱动（modernc.org/sqlite）
           GOOS: linux
           GOARCH: amd64
-        run: go build -trimpath -ldflags "-s -w" -o ../dist/hub-linux-amd64 ./cmd/hub
+        run: |
+          go build -trimpath -ldflags "-s -w" -o ../dist/hub-linux-amd64 ./cmd/hub
+          go build -trimpath -ldflags "-s -w" -o ../dist/backend-linux-amd64 ./cmd/backend
 
       - name: 校验产物
         run: |
           file dist/hub-linux-amd64
           test -x dist/hub-linux-amd64
+          file dist/backend-linux-amd64
+          test -x dist/backend-linux-amd64
 
       - uses: actions/upload-artifact@v4
         with:
           name: hub-linux-amd64
-          path: dist/hub-linux-amd64
+          path: |
+            dist/hub-linux-amd64
+            dist/backend-linux-amd64
           if-no-files-found: error
