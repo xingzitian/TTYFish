@@ -43,6 +43,9 @@ trap 'rm -rf "$TMP"' EXIT
 
 BASE="https://github.com/$REPO/releases/download/$TAG"
 export https_proxy="$PROXY" http_proxy="$PROXY"
+# 下载走代理，但本地健康检查绝对不能走——否则 curl 会把 127.0.0.1 也塞给 mihomo，
+# 健康检查永远失败（踩过：服务明明起来了，部署却回滚）。
+export no_proxy="127.0.0.1,localhost" NO_PROXY="127.0.0.1,localhost"
 
 log "下载 $TAG"
 if ! fetch "$BASE/hub-linux-amd64" "$TMP/hub"; then
@@ -67,7 +70,7 @@ mv "$TMP/hub" "$BIN_DIR/hub"
 sudo -n systemctl restart ttyfish
 
 for _ in $(seq 1 10); do
-	if curl -sf --max-time 3 "$HEALTH" >/dev/null; then
+	if curl -sf --max-time 3 --noproxy "*" "$HEALTH" >/dev/null; then
 		echo "$TAG" >"$BIN_DIR/.version"
 		log "已切换到 $TAG"
 		exit 0
