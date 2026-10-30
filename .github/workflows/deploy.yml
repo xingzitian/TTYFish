@@ -68,14 +68,16 @@ jobs:
           # 固定 host key，避免首次连接交互；也避免被中间人顶替
           ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
+          # 注意：ssh 用 -p 指定端口，scp 用大写 -P。写成一样会把端口当成文件路径。
           SSH_OPTS="-i $HOME/.ssh/deploy_key -p $PORT -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15"
+          SCP_OPTS="-i $HOME/.ssh/deploy_key -P $PORT -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=15"
           echo "--- 先测一次连接 ---"
           ssh $SSH_OPTS "$USER@$HOST" 'echo 连接正常: $(id -un)' || {
             echo "::error::SSH 连不上，检查 deploy 用户和公钥"
             ssh -vv $SSH_OPTS "$USER@$HOST" true 2>&1 | grep -E "Offering|Authentications|Permission|identity file" | head -10
             exit 1
           }
-          scp $SSH_OPTS dist/hub-linux-amd64 "$USER@$HOST:/opt/ttyfish/hub.new"
+          scp $SCP_OPTS dist/hub-linux-amd64 "$USER@$HOST:/opt/ttyfish/hub.new"
 
           ssh $SSH_OPTS "$USER@$HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
