@@ -1,0 +1,106 @@
+name: Deploy
+
+# 只在打 tag 时部署。线上随时有人在打牌，重启会把所有 SSH 会话踢掉，
+# 所以发布必须是一个明确动作，而不是"推了代码就自动上"。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: # 也可以手动点一下（默认用 main 最新代码）
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 部署到生产
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: hub/go.sum
+
+      - name: 编译 linux/amd64
+        working-directory: hub
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -trimpath -ldflags "-s -w" -o ../dist/hub-linux-amd64 ./cmd/hub
+          file ../dist/hub-linux-amd64
+          sha256sum ../dist/hub-linux-amd64
+
+      - name: 上传并切换
+        env:
+          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          HOST: ${{ secrets.SSH_HOST }}
+          USER: ${{ secrets.SSH_USER }}
+          PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${PORT:-22}"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # 固定 host key，避免首次连接交互；也避免被中间人顶替
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          SSH_OPTS="-i $HOME/.ssh/deploy_key -p $PORT -o IdentitiesOnly=yes -o BatchMode=yes"
+          scp $SSH_OPTS dist/hub-linux-amd64 "$USER@$HOST:/opt/ttyfish/hub.new"
+
+          ssh $SSH_OPTS "$USER@$HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd /opt/ttyfish
+          chmod +x hub.new
+          echo "新版本: $(sha256sum hub.new | cut -d' ' -f1)"
+
+          # 有人在游戏里就别重启——那会把正在打的人踢掉。
+          ACTIVE=$(ss -Htn state established '( sport = :12331 )' 2>/dev/null | wc -l)
+          if [ "$ACTIVE" -gt 0 ]; then
+            echo "::error::现在有 $ACTIVE 个连接在 12331 上，有人在玩，跳过这次部署"
+            rm -f hub.new
+            exit 1
+          fi
+
+          [ -f hub ] && cp -p hub hub.prev
+
+          # 同一个文件系统内 mv 是原子的：不会出现"半个二进制"的窗口
+          mv hub.new hub
+
+          sudo -n systemctl restart ttyfish
+
+          for i in 1 2 3 4 5; do
+            if curl -sf --max-time 3 http://127.0.0.1:12332/healthz >/dev/null; then
+              echo "健康检查通过（第 $i 次）"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "::error::健康检查失败，回滚到上一版"
+          if [ -f hub.prev ]; then
+            mv hub.prev hub
+            sudo -n systemctl restart ttyfish
+          fi
+          exit 1
+          REMOTE
+
+      - name: 部署后验证
+        env:
+          HOST: ${{ secrets.SSH_HOST }}
+          USER: ${{ secrets.SSH_USER }}
+          PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${PORT:-22}"
+          SSH_OPTS="-i $HOME/.ssh/deploy_key -p $PORT -o IdentitiesOnly=yes -o BatchMode=yes"
+          ssh $SSH_OPTS "$USER@$HOST" 'systemctl is-active ttyfish; curl -s --max-time 3 http://127.0.0.1:12332/healthz; echo'

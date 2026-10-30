@@ -29,7 +29,7 @@ jobs:
         with:
           # go.mod 里同时写了 go 1.24.2 和 toolchain go1.24.4。
           # 用 1.24.x 直接装最新的补丁版，免得 Go 在 CI 里再去下载 toolchain。
-          go-version: '1.24.x'
+          go-version: '1.26.x'
           # 三个模块的 go.sum 不一样，不按模块分开会让缓存互相覆盖。
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.26.x'
           cache-dependency-path: hub/go.sum
 
       # 真起 hub、真用 ssh 敲命令、真拿会话。M0 那条"没有密码"的链路
@@ -94,7 +94,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.26.x'
           cache-dependency-path: hub/go.sum
 
       - name: 交叉编译
