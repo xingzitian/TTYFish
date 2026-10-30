@@ -44,56 +44,43 @@ journalctl -u ttyfish -n 50 --no-pager
 
 ## 服务器上的一次性设置
 
-已经做过了，换机器时照抄：
+现在是**两个进程**：
+
+| 服务 | 作用 | 监听 |
+|---|---|---|
+| `ttyfish-backend` | 账号、房间、UNO 规则 | `127.0.0.1:8082` |
+| `ttyfish` | SSH 网关（只渲染，不跑规则） | `0.0.0.0:12331` |
+
+网关启动时要连后端，所以 `ttyfish.service` 里写了 `Requires=ttyfish-backend.service`。
 
 ```bash
-# 运行账号（无 shell）
+# 运行账号（两个服务共用，无 shell）
 useradd -r -s /usr/sbin/nologin -d /var/lib/ttyfish ttyfish
 mkdir -p /opt/ttyfish /var/lib/ttyfish
 chown ttyfish:ttyfish /var/lib/ttyfish
 
-# 部署账号
+# 部署账号：能换二进制、能重启这两个服务
 useradd -r -m -s /bin/bash deploy
-chown deploy:deploy /opt/ttyfish          # 要能换二进制
+chown deploy:deploy /opt/ttyfish
 # ~/.ssh/authorized_keys 放 CI 那把公钥，权限 600
 
-# 只给它重启本服务的权限
+# 网关凭证：后端用它签发玩家令牌，网关用它换令牌，两边必须是同一个
+mkdir -p /etc/ttyfish
+echo "TTYFISH_GATEWAY_TOKEN=$(openssl rand -hex 32)" > /etc/ttyfish/gateway.env
+chmod 600 /etc/ttyfish/gateway.env
+
 cat >/etc/sudoers.d/ttyfish-deploy <<'EOF'
-deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart ttyfish, /usr/bin/systemctl status ttyfish, /usr/bin/systemctl is-active ttyfish
+deploy ALL=(root) NOPASSWD: /usr/bin/systemctl restart ttyfish, /usr/bin/systemctl restart ttyfish-backend, /usr/bin/systemctl status ttyfish, /usr/bin/systemctl status ttyfish-backend, /usr/bin/systemctl is-active ttyfish, /usr/bin/systemctl is-active ttyfish-backend
 EOF
 chmod 440 /etc/sudoers.d/ttyfish-deploy && visudo -cf /etc/sudoers.d/ttyfish-deploy
-
-# 服务
-cat >/etc/systemd/system/ttyfish.service <<'EOF'
-[Unit]
-Description=TTYFish platform (SSH games + web)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=ttyfish
-Group=ttyfish
-WorkingDirectory=/opt/ttyfish
-ExecStart=/opt/ttyfish/hub -addr :12331 -http :12332 -db /var/lib/ttyfish/hub.db -host-key /var/lib/ttyfish/host_ed25519 -ssh-hint "-p 12331 你的用户名@159.75.78.7"
-Restart=always
-RestartSec=2
-StateDirectory=ttyfish
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-PrivateDevices=true
-MemoryMax=512M
-TasksMax=1024
-
-[Install]
-WantedBy=multi-user.target
-EOF
-systemctl daemon-reload && systemctl enable --now ttyfish
 ```
 
-端口：SSH `12331`、HTTP `12332`。腾讯云安全组和 1Panel 防火墙都要放行。
+两个 unit 的完整内容在服务器 `/etc/systemd/system/ttyfish{,-backend}.service`，
+要点：都跑在 `ttyfish` 账号下、都 `EnvironmentFile=/etc/ttyfish/gateway.env`、
+都用 `StateDirectory=ttyfish` 把 `/var/lib/ttyfish` 挂成可写。
+
+端口：SSH `12331`（对外）、后端 `8082`（只绑回环，不需要放行）。
+腾讯云安全组和 1Panel 防火墙只要放行 `12331`。
 
 ## 踩过的坑
 

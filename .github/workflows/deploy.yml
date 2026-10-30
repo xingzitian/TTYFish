@@ -35,6 +35,7 @@ jobs:
           go-version: '1.26.x'
           cache-dependency-path: hub/go.sum
 
+      # 两个二进制：后端（账号+房间+规则）和 SSH 网关
       - name: 编译 linux/amd64
         working-directory: hub
         env:
@@ -44,9 +45,12 @@ jobs:
         run: |
           mkdir -p ../dist
           go build -trimpath -ldflags "-s -w" -o ../dist/hub-linux-amd64 ./cmd/hub
-          file ../dist/hub-linux-amd64
-          ( cd ../dist && sha256sum hub-linux-amd64 > hub-linux-amd64.sha256 )
-          cat ../dist/hub-linux-amd64.sha256
+          go build -trimpath -ldflags "-s -w" -o ../dist/backend-linux-amd64 ./cmd/backend
+          file ../dist/hub-linux-amd64 ../dist/backend-linux-amd64
+          cd ../dist
+          sha256sum hub-linux-amd64 > hub-linux-amd64.sha256
+          sha256sum backend-linux-amd64 > backend-linux-amd64.sha256
+          cat *.sha256
 
       - name: 建 Release
         env:
@@ -54,13 +58,12 @@ jobs:
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
+          ASSETS="dist/hub-linux-amd64 dist/hub-linux-amd64.sha256 dist/backend-linux-amd64 dist/backend-linux-amd64.sha256"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release 已存在，补传资产"
-            gh release upload "$TAG" dist/hub-linux-amd64 dist/hub-linux-amd64.sha256 --clobber
+            gh release upload "$TAG" $ASSETS --clobber
           else
-            gh release create "$TAG" \
-              dist/hub-linux-amd64 dist/hub-linux-amd64.sha256 \
-              --title "$TAG" --generate-notes
+            gh release create "$TAG" $ASSETS --title "$TAG" --generate-notes
           fi
 
       # 服务器侧脚本由 CI 推过去（4KB，不是 15MB），再执行。
