@@ -34,7 +34,7 @@
 
 ## SSH 网关
 
-游戏链路全部覆盖。13/15。
+游戏链路全部覆盖。14/15。
 
 | 状态 | 接口 | 用途 |
 |---|---|---|
@@ -51,10 +51,13 @@
 | ✅ | `POST /api/v1/rooms/{code}/restart-votes` | 重开投票 |
 | ✅ | `POST /api/v1/rooms/{code}/actions` | 出牌等动作（带 revision） |
 | ✅ | `GET /api/v1/rooms/{code}/events` | SSE 实时快照 |
-| ⬜ | `GET /api/v1/games` | 网关只挂 uno，游戏列表写死在组装入口 |
+| ✅ | `GET /api/v1/games` | 大厅列表（和本地挂载取交集） |
 | ⬜ | `GET /api/v1/rooms/{code}` | 靠 SSE 首帧拿快照，不需要单独拉 |
 
-**还没做**：大厅选游戏（多游戏需要先调 `/games` 再选）。
+**已完成**：连上来先进大厅选游戏（`hub/internal/lobby` + `hub/internal/gateway`），
+选完才建房进游戏；重连会跳过大厅直接回原房间。
+
+**还没做**：多个游戏同时挂载（现在只注册了 uno）。
 
 ---
 

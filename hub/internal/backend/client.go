@@ -171,3 +171,40 @@ func apiError(status int, raw []byte) error {
 	}
 	return fmt.Errorf("后端返回 HTTP %d", status)
 }
+
+// Game 是后端游戏列表里的一项。
+type Game struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	MinPlayers      int    `json:"min_players"`
+	MaxPlayers      int    `json:"max_players"`
+	ProtocolVersion int    `json:"protocol_version"`
+}
+
+// Games 取后端开放的游戏列表。网关拿它和本地挂载的 UI 取交集。
+func (c *Client) Games(ctx context.Context, token string) ([]Game, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/v1/games", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("连不上后端：%w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, apiError(resp.StatusCode, raw)
+	}
+	var body struct {
+		Items []Game `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, err
+	}
+	return body.Items, nil
+}

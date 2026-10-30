@@ -22,11 +22,12 @@ import (
 
 // Client 是一个玩家在某个后端会话里的房间客户端。
 type Client struct {
-	base  string
-	token string
-	game  string
-	code  string
-	http  *http.Client
+	base   string
+	token  string
+	game   string
+	code   string
+	gameID string
+	http   *http.Client
 
 	mu     sync.Mutex
 	snap   client.Snapshot
@@ -178,6 +179,13 @@ func (c *Client) Resume() (bool, error) {
 	c.apply(snap)
 	c.Watch()
 	return true, nil
+}
+
+// GameID 是当前房间属于哪个游戏（网关靠它找到对应的界面）。
+func (c *Client) GameID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.gameID
 }
 
 // Revision 是本地看到的最新房间版本。

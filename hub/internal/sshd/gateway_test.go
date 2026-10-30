@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,14 +15,20 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/xingzitian/TTYFish/hub/internal/backend"
 	"github.com/xingzitian/TTYFish/hub/internal/registry"
 	"github.com/xingzitian/TTYFish/sdk/game"
 	gossh "golang.org/x/crypto/ssh"
 )
 
-// 这个游戏故意不实现规则方法：仅打开界面不应该访问游戏状态。
+// 这个游戏只实现大厅需要的那几个元信息；规则方法故意留空——
+// 仅仅打开界面不应该访问游戏状态。
 type mountGame struct{ game.Game }
+
+func (mountGame) Name() string  { return "测试游戏" }
+func (mountGame) MinSeats() int { return 1 }
+func (mountGame) MaxSeats() int { return 4 }
 
 type mountModel struct{ closed chan struct{} }
 
@@ -56,6 +63,11 @@ func newFakeBackend(t *testing.T, gatewayToken string) *fakeBackend {
 	})
 	mux.HandleFunc("/api/v1/internal/auth/ssh", f.handleKeyLogin)
 	mux.HandleFunc("/api/v1/auth/password", f.handlePasswordLogin)
+	mux.HandleFunc("/api/v1/rooms", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(lobbySnapshot())
+	})
 	mux.HandleFunc("/api/v1/me/room", func(w http.ResponseWriter, r *http.Request) {
 		// 没有房间：网关应该照常进大厅
 		http.Error(w, `{"error":{"code":"not_found","message":"没有房间"}}`, http.StatusNotFound)
@@ -126,6 +138,16 @@ func (f *fakeBackend) writePlayer(w http.ResponseWriter, acc fakeAccount) {
 	})
 }
 
+// lobbySnapshot 是最小的大厅快照，够网关建完客户端就行。
+func lobbySnapshot() map[string]any {
+	return map[string]any{
+		"protocol_version": 1, "game_id": "test", "code": "ABC234", "revision": 1,
+		"phase": "lobby", "players": []any{}, "my_seat": 0, "max_seats": 4,
+		"is_host": true, "view": nil, "timeline": []any{}, "vote": nil,
+		"notice": "", "pending_left_ms": 0, "kicked": false,
+	}
+}
+
 func unauthorized(w http.ResponseWriter) {
 	http.Error(w, `{"error":{"code":"invalid_credentials","message":"账号或登录凭证错误"}}`, http.StatusUnauthorized)
 }
@@ -156,16 +178,25 @@ func signer(t *testing.T) (gossh.Signer, string) {
 // startGateway 起一个指向假后端的网关。
 func startGateway(t *testing.T, fb *fakeBackend, onMount func(registry.UIContext)) string {
 	t.Helper()
-	srv, err := New(Config{
-		HostKeyPath: filepath.Join(t.TempDir(), "host"),
-		BackendURL:  fb.URL,
-		Accounts:    backend.New(fb.URL, fb.gateway),
-		Game: registry.Entry{ID: "test", Game: mountGame{}, NewUI: func(c registry.UIContext) registry.Model {
+	games := registry.New()
+	if err := games.Register(registry.Entry{
+		ID: "test", Game: mountGame{},
+		NewUI: func(c registry.UIContext) registry.Model {
 			if onMount != nil {
 				onMount(c)
 			}
 			return &mountModel{closed: make(chan struct{})}
-		}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := New(Config{
+		HostKeyPath: filepath.Join(t.TempDir(), "host"),
+		BackendURL:  fb.URL,
+		Accounts:    backend.New(fb.URL, fb.gateway),
+		Games:       games,
+		NewRenderer: func(w io.Writer, term string) *lipgloss.Renderer { return lipgloss.NewRenderer(w) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -189,7 +220,9 @@ func dial(t *testing.T, addr, user string, auth gossh.AuthMethod) (*gossh.Client
 	})
 }
 
-func openShell(t *testing.T, c *gossh.Client) *gossh.Session {
+// openShell 打开一个交互式会话，并返回标准输入——注意 stdin 必须在 Shell() 之前拿，
+// 之后 x/crypto 会报 "StdinPipe after process started"。
+func openShell(t *testing.T, c *gossh.Client) (*gossh.Session, io.WriteCloser) {
 	t.Helper()
 	session, err := c.NewSession()
 	if err != nil {
@@ -198,10 +231,14 @@ func openShell(t *testing.T, c *gossh.Client) *gossh.Session {
 	if err := session.RequestPty("xterm", 24, 80, nil); err != nil {
 		t.Fatal(err)
 	}
+	stdin, err := session.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := session.Shell(); err != nil {
 		t.Fatal(err)
 	}
-	return session
+	return session, stdin
 }
 
 // ---- 用例 ----
@@ -238,8 +275,14 @@ func TestGatewayAuthentication(t *testing.T) {
 				return // 握手阶段就拒了，符合预期
 			}
 			defer c.Close()
-			session := openShell(t, c)
+			session, stdin := openShell(t, c)
 			defer session.Close()
+
+			if tc.wantMount {
+				// 大厅里只有一个游戏，回车即进入
+				time.Sleep(100 * time.Millisecond)
+				_, _ = stdin.Write([]byte("\r"))
+			}
 
 			select {
 			case ctx := <-mounted:

@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 	bm "github.com/charmbracelet/wish/bubbletea"
@@ -28,8 +30,8 @@ import (
 	gossh "golang.org/x/crypto/ssh"
 
 	"github.com/xingzitian/TTYFish/hub/internal/backend"
+	"github.com/xingzitian/TTYFish/hub/internal/gateway"
 	"github.com/xingzitian/TTYFish/hub/internal/registry"
-	"github.com/xingzitian/TTYFish/hub/internal/remote"
 	sdkui "github.com/xingzitian/TTYFish/sdk/ui"
 )
 
@@ -37,7 +39,9 @@ import (
 type Config struct {
 	Addr        string
 	HostKeyPath string
-	Game        registry.Entry
+	Games       *registry.Registry
+	// NewRenderer 由组装入口提供：不同游戏对 TERM/色彩的处理可能不同。
+	NewRenderer func(w io.Writer, term string) *lipgloss.Renderer
 	// PrefsPath 可指定旧版偏好文件；为空时使用 host key 目录下的 prefs.json。
 	PrefsPath string
 	// BackendURL 是房间 API 的地址，例如 http://127.0.0.1:8081。
@@ -105,8 +109,16 @@ func isInteractive(s ssh.Session) bool {
 
 // New 组装 SSH 服务。返回的 server 需要调用方自己 ListenAndServe。
 func New(cfg Config) (*ssh.Server, error) {
-	if err := cfg.Game.Validate(); err != nil {
-		return nil, err
+	if cfg.NewRenderer == nil {
+		return nil, fmt.Errorf("缺少渲染器工厂")
+	}
+	if cfg.Games == nil || cfg.Games.Len() == 0 {
+		return nil, fmt.Errorf("至少要挂载一个游戏")
+	}
+	for _, e := range cfg.Games.List() {
+		if err := e.Validate(); err != nil {
+			return nil, err
+		}
 	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":2222"
@@ -226,33 +238,25 @@ func New(cfg Config) (*ssh.Server, error) {
 					return nil
 				}
 
-				conn := remote.New(cfg.BackendURL, player.Token, cfg.Game.ID)
-				// 断线重连：这个账号还在某个房间里就直接回去
-				if resumed, err := conn.Resume(); err != nil {
-					slog.Warn("恢复房间失败", "account", player.Account.ID, "err", err)
-				} else if resumed {
-					slog.Info("恢复房间", "account", player.Account.ID)
-				}
-
 				term := ""
 				if pty, _, ok := s.Pty(); ok {
 					term = pty.Term
 				}
-				key := "account:" + player.Account.ID
-				model := cfg.Game.NewUI(registry.UIContext{
-					Key: key, Name: player.Account.Username, Client: conn, Output: s, Term: term,
+				root := gateway.New(gateway.Deps{
+					Accounts: cfg.Accounts, Backend: cfg.BackendURL, Registry: cfg.Games,
+					Player: player, Output: s, Term: term,
 					Mode: cfg.Mode, ModeOf: pref.mode, SetMode: pref.setMode,
+					Renderer: cfg.NewRenderer(s, term), ResumeMode: true,
 				})
 
-				p := tea.NewProgram(model, append(bm.MakeOptions(s), tea.WithAltScreen())...)
+				p := tea.NewProgram(root, append(bm.MakeOptions(s), tea.WithAltScreen())...)
 
 				// 会话一结束就退订并通知房间"这人掉线了"。
 				// 座位会保留 60 秒，期间由电脑代打，重连即接管。
 				go func() {
 					<-s.Context().Done()
 					// 只断开 SSE：后端那边座位还在，重连能回来
-					model.Close()
-					conn.Close()
+					root.Close()
 				}()
 				return p
 			}, termenv.ANSI256),

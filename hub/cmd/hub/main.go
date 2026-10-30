@@ -9,12 +9,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/xingzitian/TTYFish/games/uno"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
@@ -58,6 +61,21 @@ func main() {
 	// 规则由后端决定；这里这份只用于界面展示（谁在出牌、剩几张）。
 	displayRules := engine.Rules{Challenge: true}
 
+	// 网关能渲染哪些游戏，就在组装入口登记；后端那边开放哪些由 /api/v1/games 决定。
+	games := registry.New()
+	if err := games.Register(registry.Entry{
+		ID:   "uno",
+		Game: uno.New(displayRules),
+		NewUI: func(c registry.UIContext) registry.Model {
+			return unoUI.NewModel(unoUI.Identity{Key: c.Key, Name: c.Name}, c.Client, unoUI.Options{
+				Rules: displayRules, Mode: c.Mode, ModeOf: c.ModeOf, SetMode: c.SetMode,
+			}, unoUI.NewRenderer(c.Output, c.Term))
+		},
+	}); err != nil {
+		slog.Error("注册游戏失败", "err", err)
+		os.Exit(1)
+	}
+
 	srv, err := sshd.New(sshd.Config{
 		Addr:        *addr,
 		HostKeyPath: *hostKey,
@@ -66,14 +84,9 @@ func main() {
 		PrefsPath:   filepath.Join(filepath.Dir(*hostKey), "prefs.json"),
 		IdleTimeout: *idle,
 		Mode:        mode,
-		Game: registry.Entry{
-			ID:   "uno",
-			Game: uno.New(displayRules),
-			NewUI: func(c registry.UIContext) registry.Model {
-				return unoUI.NewModel(unoUI.Identity{Key: c.Key, Name: c.Name}, c.Client, unoUI.Options{
-					Rules: displayRules, Mode: c.Mode, ModeOf: c.ModeOf, SetMode: c.SetMode,
-				}, unoUI.NewRenderer(c.Output, c.Term))
-			},
+		Games:       games,
+		NewRenderer: func(w io.Writer, term string) *lipgloss.Renderer {
+			return unoUI.NewRenderer(w, term)
 		},
 	})
 	if err != nil {
