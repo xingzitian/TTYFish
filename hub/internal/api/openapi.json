@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "TTYFish 账号认证 API",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "阶段一账号 API。核心后端独立运行，Web/SSH 通过 HTTP 调用。仅使用 Authorization Bearer，不接受 Cookie。所有响应禁止缓存。注册和密码认证按直连来源 IP 共用每分钟 10 次预算。"
   },
   "servers": [
@@ -16,6 +16,312 @@
     }
   ],
   "paths": {
+    "/api/v1/auth/ssh/challenges": {
+      "post": {
+        "operationId": "startSSHChallenge",
+        "summary": "为已绑定公钥的固定账号创建 90 秒 SSH 登录挑战",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SSHChallengeStart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "创建成功；poll_token 仅供浏览器持有",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SSHChallenge"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求格式或字段错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "用户名不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "不允许此浏览器来源",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "请求体超过 16 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过于频繁；Retry-After: 60",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/ssh/challenges/poll": {
+      "post": {
+        "operationId": "pollSSHChallenge",
+        "summary": "浏览器凭 poll_token 查询并一次性领取会话",
+        "description": "每隔至少 1500ms 查询。pending 表示等待；ok 附带 session 且仅返回一次；expired 包括不存在、过期、已领取或公钥已撤销。每来源 IP 每分钟独立限制 120 次。查询凭证只能放 JSON 请求体，不能放 URL。",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SSHChallengePoll"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "挑战状态；仅 ok 含 session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SSHChallengeResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求格式或字段错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "不允许此浏览器来源",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "请求体超过 16 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过于频繁；Retry-After: 60",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/internal/auth/ssh/challenges/confirm": {
+      "post": {
+        "operationId": "confirmSSHChallenge",
+        "summary": "可信 SSH 网关确认网页登录挑战",
+        "description": "必须先完成真实 SSH 签名验证。username 和 public_key 必须取自已认证 SSH 连接；code 取自 auth <code>。只返回确认结果，不向终端发放浏览器会话或 poll_token。确认码可忽略大小写和首尾空白。",
+        "security": [
+          {
+            "gatewayAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SSHChallengeConfirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "已确认，通知玩家回浏览器"
+          },
+          "400": {
+            "description": "请求格式或字段错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "网关凭证错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "不允许此浏览器来源",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "challenge_invalid：确认码无效、过期、已使用或账号公钥不匹配",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "请求体超过 16 KiB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "需要 application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "请求过于频繁；Retry-After: 60",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "网关认证未启用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "health",
@@ -1020,6 +1326,130 @@
       }
     },
     "schemas": {
+    "SSHChallengeStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "username": {
+          "type": "string",
+          "description": "注册时的固定用户名"
+        }
+      },
+      "required": [
+        "username"
+      ]
+    },
+    "SSHChallenge": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "username": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$",
+          "description": "一次性终端确认码，与浏览器查询凭证不同"
+        },
+        "poll_token": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "高熵浏览器凭证，不要传给 SSH 网关"
+        },
+        "expires_in": {
+          "type": "integer",
+          "enum": [
+            90
+          ]
+        },
+        "poll_interval_ms": {
+          "type": "integer",
+          "enum": [
+            1500
+          ]
+        }
+      },
+      "required": [
+        "username",
+        "code",
+        "poll_token",
+        "expires_in",
+        "poll_interval_ms"
+      ]
+    },
+    "SSHChallengePoll": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "poll_token": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "poll_token"
+      ]
+    },
+    "SSHChallengeConfirm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "username": {
+          "type": "string"
+        },
+        "public_key": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string",
+          "description": "网页显示的一次性确认码"
+        }
+      },
+      "required": [
+        "username",
+        "public_key",
+        "code"
+      ]
+    },
+    "SSHChallengeResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "expired"
+              ]
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": [
+                "ok"
+              ]
+            },
+            "session": {
+              "$ref": "#/components/schemas/Session"
+            }
+          },
+          "required": [
+            "state",
+            "session"
+          ]
+        }
+      ]
+    },
       "Account": {
         "type": "object",
         "additionalProperties": false,
@@ -1200,7 +1630,8 @@
                   "rate_limited",
                   "internal_error",
                   "gateway_disabled",
-                  "gateway_unauthorized"
+                  "gateway_unauthorized",
+                  "challenge_invalid"
                 ]
               },
               "message": {

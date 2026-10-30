@@ -53,6 +53,9 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 | POST | `/api/v1/me/keys` | 玩家 Bearer | 添加公钥 |
 | DELETE | `/api/v1/me/keys/{fingerprint}` | 玩家 Bearer | 删除自己的公钥 |
 | POST | `/api/v1/internal/auth/ssh` | 网关 Bearer | 私钥证明成功后换取玩家会话 |
+| POST | `/api/v1/auth/ssh/challenges` | 无 | 为固定用户名生成网页登录挑战 |
+| POST | `/api/v1/internal/auth/ssh/challenges/confirm` | 网关 Bearer | 验证 SSH 私钥后确认挑战 |
+| POST | `/api/v1/auth/ssh/challenges/poll` | 浏览器 poll_token | 查询状态并一次性领取会话 |
 
 账号 ID 是稳定身份，用户名固定且区分大小写：新用户名只接受小写字母，3–20 位，允许数字、下划线和短横线，以字母开头。SSH 网关必须使用后端返回的账号 ID 标识玩家，不能使用客户端自报用户名或公钥指纹作为游戏账号 ID。
 
@@ -127,7 +130,57 @@ Content-Type: application/json
 
 后端检查用户名与该公钥所属账号完全匹配，成功返回与密码登录相同格式的玩家会话。网关凭证与玩家会话不能相互替代。此内部接口信任网关完成签名验证，本身不校验 SSH 签名；不能把它代理成任何人可调用的“提交公钥登录”接口。网关凭证具有代表玩家登录的权限。
 
-第一阶段没有提供浏览器 SSH 挑战轮询 API。仅注册公钥、没有密码的账号，需要由可信 SSH 网关认证；后续迁移网页的 SSH 确认流程时，再补挑战 API。现有 `cmd/hub` 的网页 SSH 确认流程仍可使用。
+浏览器通过下方挑战流程使用 SSH 密钥登录，无需设置密码。现有 `cmd/hub` 仍使用原来的挑战链路，尚未迁移为独立 API 客户端；两套挑战凭证按用途隔离，不能相互确认或领取。
+
+## 浏览器 SSH 挑战登录
+
+1. 浏览器提交固定用户名，创建挑战：
+
+   ```http
+   POST /api/v1/auth/ssh/challenges
+   Content-Type: application/json
+
+   {"username":"alice"}
+   ```
+
+   返回 `201`：
+
+   ```json
+   {"username":"alice","code":"ABCD-2345","poll_token":"<64位小写十六进制凭证>","expires_in":90,"poll_interval_ms":1500}
+   ```
+
+   账号必须已存在且绑定公钥。浏览器根据部署配置显示命令，例如 `ssh -p 2222 alice@服务器地址 auth ABCD-2345`。后端不拼接服务器地址；此命令需要配套的 API 模式 SSH 网关支持。
+
+2. 玩家在自己的电脑上执行命令。SSH 网关必须先完成私钥认证，再用服务端网关凭证确认：
+
+   ```http
+   POST /api/v1/internal/auth/ssh/challenges/confirm
+   Authorization: Bearer <TTYFISH_GATEWAY_TOKEN>
+   Content-Type: application/json
+
+   {"username":"alice","public_key":"ssh-ed25519 AAAA...","code":"ABCD-2345"}
+   ```
+
+   `username` 和 `public_key` 必须来自已通过认证的 SSH 连接，不能从命令参数中直接信任。确认码允许小写和首尾空白；成功返回 `204`，终端提示“已确认，请回浏览器继续”。只接受密钥身份，不接受密码认证连接冒充密钥确认。确认接口不返回玩家会话或浏览器查询凭证。
+
+3. 浏览器每隔至少 `poll_interval_ms` 查询：
+
+   ```http
+   POST /api/v1/auth/ssh/challenges/poll
+   Content-Type: application/json
+
+   {"poll_token":"<创建挑战时返回的凭证>"}
+   ```
+
+   返回 `200`，状态如下：
+
+   - `{"state":"pending"}`：等待终端确认，继续轮询。
+   - `{"state":"ok","session":{...}}`：已确认，`session` 与密码登录响应格式相同，保存会话后停止轮询。
+   - `{"state":"expired"}`：凭证不存在、已过期、已领取或确认的公钥已被删除，停止轮询并提示重新获取。
+
+挑战从创建开始总计 90 秒有效，确认不会延长时间。终端确认码与浏览器查询凭证分开，数据库中都只保存哈希。不要把 `poll_token` 放入 URL、终端命令或传给 SSH 网关。
+
+会话写入和挑战消费在同一个数据库事务完成。并发轮询只能有一个请求获得会话；再次领取返回 `expired`。如果浏览器在成功响应返回时断网，不能重放领取令牌，需要重新发起挑战。确认的公钥被撤销后，尚未领取的挑战也不能换取会话。
 
 ## 错误与请求限制
 
@@ -146,12 +199,13 @@ Content-Type: application/json
 | 404 | `not_found` | 资源不存在或不属于当前账号 |
 | 405 | `method_not_allowed` | 检查 HTTP 方法 |
 | 409 | `account_conflict` / `last_credential` | 提示用户名、公钥冲突或需要保留凭证 |
+| 409 | `challenge_invalid` | 确认码无效、已使用、已过期或账号公钥不匹配 |
 | 413 / 415 | `request_too_large` / `unsupported_media_type` | 限制请求体、使用 JSON |
 | 429 | `rate_limited` | 等待 Retry-After 指定的秒数 |
 | 500 | `internal_error` | 提示稍后重试，服务端查看日志 |
 | 503 | `gateway_disabled` | 配置网关凭证 |
 
-JSON 请求体最多 16 KiB，不接受未知字段或多个 JSON 值。注册、密码登录、密码设置及网关密钥登录按直连来源 IP 共用每分钟 10 次预算；失败请求也计数。Web 反向代理和 SSH 网关的所有玩家暂时会共用该入口 IP 的预算，扩展网关接入时需要调整策略。
+JSON 请求体最多 16 KiB，不接受未知字段或多个 JSON 值。注册、密码登录、密码设置、网关密钥登录、挑战创建与确认按直连来源 IP 共用每分钟 10 次预算；失败请求也计数。挑战轮询使用独立的每分钟 120 次预算，不会消耗登录预算。Web 反向代理和 SSH 网关的所有玩家暂时会共用该入口 IP 的预算，扩展网关接入时需要调整策略。
 
 ## 验证与下一阶段
 
@@ -161,5 +215,7 @@ go test ./... -count=1
 ```
 
 API 测试使用真实 SQLite，覆盖账号生命周期、网关权限、玩家令牌隔离、公钥归属、最后凭证保护、密码修改、CORS、JSON 校验与限流。旧 Web/SSH 测试继续运行，防止引入回归。
+
+挑战测试覆盖浏览器发起 → 网关确认 → 浏览器领取会话、错误身份、重放、过期、公钥撤销、旧协议隔离、两个数据库连接并发领取，以及会话写入失败后可重试。
 
 下一阶段将房间与游戏 API 加到同一后端：由后端维护房间和玩家视图，通过明确的动作结构与状态推送协议供 SSH/Web 使用；随后把原 `cmd/hub` 的接入层迁移到 API，停止直接访问数据库与房间实现。

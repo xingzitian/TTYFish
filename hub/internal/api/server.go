@@ -44,6 +44,9 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/v1/accounts", s.register)
 	s.mux.HandleFunc("POST /api/v1/auth/password", s.password)
 	s.mux.HandleFunc("POST /api/v1/internal/auth/ssh", s.keyLogin)
+	s.mux.HandleFunc("POST /api/v1/auth/ssh/challenges", s.startSSHChallenge)
+	s.mux.HandleFunc("POST /api/v1/auth/ssh/challenges/poll", s.pollSSHChallenge)
+	s.mux.HandleFunc("POST /api/v1/internal/auth/ssh/challenges/confirm", s.confirmSSHChallenge)
 	s.mux.HandleFunc("GET /api/v1/me", s.me)
 	s.mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
 	s.mux.HandleFunc("PUT /api/v1/me/password", s.setPassword)
@@ -194,14 +197,20 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, 200, session)
 }
-func (s *Server) keyLogin(w http.ResponseWriter, r *http.Request) {
+func (s *Server) requireGateway(w http.ResponseWriter, r *http.Request) bool {
 	if s.cfg.GatewayToken == "" {
 		failure(w, 503, "gateway_disabled", "未启用 SSH 网关认证")
-		return
+		return false
 	}
 	supplied, expected := sha256.Sum256([]byte(bearer(r))), sha256.Sum256([]byte(s.cfg.GatewayToken))
 	if subtle.ConstantTimeCompare(supplied[:], expected[:]) != 1 {
 		failure(w, 401, "gateway_unauthorized", "无效的网关凭证")
+		return false
+	}
+	return true
+}
+func (s *Server) keyLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.requireGateway(w, r) {
 		return
 	}
 	if !s.allow(w, r) {
@@ -315,6 +324,8 @@ func report(w http.ResponseWriter, err error) {
 		failure(w, 404, "not_found", "资源不存在")
 	case errors.Is(err, account.ErrLastCredential):
 		failure(w, 409, "last_credential", "请先设置密码或添加其他公钥，再删除最后一把公钥")
+	case errors.Is(err, account.ErrChallengeInvalid):
+		failure(w, 409, "challenge_invalid", "确认码无效、已使用、已过期或与账号公钥不匹配")
 	default:
 		slog.Error("账号 API 请求失败", "err", err)
 		failure(w, 500, "internal_error", "服务暂时不可用")

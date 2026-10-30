@@ -37,6 +37,10 @@ type Repository interface {
 	Link(string, string, string) error
 	RemoveIdentity(string, string) (bool, error)
 	AllowPasswordAttempt(string) bool
+	AllowPollAttempt(string) bool
+	NewAPIChallenge(string, time.Duration) (store.Challenge, error)
+	ConfirmAPIChallenge(string, string, string) error
+	RedeemAPIChallenge(string, time.Duration) (string, store.Account, string, error)
 }
 
 type Service struct{ repo Repository }

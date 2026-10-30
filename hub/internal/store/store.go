@@ -399,7 +399,7 @@ func (s *Store) Confirm(code, fp string) (purpose, accountID string, err error) 
 func (s *Store) Poll(poll string) (state, accountID, fp string, ok bool, err error) {
 	var expires int64
 	err = s.db.QueryRow(
-		`SELECT state, account_id, confirmed_fp, expires_at FROM challenges WHERE poll_hash = ?`, hash(poll),
+		`SELECT state, account_id, confirmed_fp, expires_at FROM challenges WHERE poll_hash = ? AND purpose IN ('login','link')`, hash(poll),
 	).Scan(&state, &accountID, &fp, &expires)
 	if err == sql.ErrNoRows {
 		return "", "", "", false, nil

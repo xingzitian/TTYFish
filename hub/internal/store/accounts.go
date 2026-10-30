@@ -20,10 +20,19 @@ type loginAttempts struct {
 
 // AllowPasswordAttempt shares a bounded per-IP budget between HTTP and SSH.
 func (s *Store) AllowPasswordAttempt(remote string) bool {
+	return s.allowAttempt(remote, "auth:", 10)
+}
+
+func (s *Store) AllowPollAttempt(remote string) bool {
+	return s.allowAttempt(remote, "poll:", 120)
+}
+
+func (s *Store) allowAttempt(remote, namespace string, limit int) bool {
 	host, _, err := net.SplitHostPort(remote)
 	if err != nil {
 		host = remote
 	}
+	host = namespace + host
 	s.attemptMu.Lock()
 	defer s.attemptMu.Unlock()
 	if s.attempts == nil {
@@ -36,7 +45,7 @@ func (s *Store) AllowPasswordAttempt(remote string) bool {
 		}
 	}
 	a := s.attempts[host]
-	if a.count >= 10 || (a.count == 0 && len(s.attempts) >= 10000) {
+	if a.count >= limit || (a.count == 0 && len(s.attempts) >= 10000) {
 		return false
 	}
 	if a.count == 0 {
@@ -113,7 +122,7 @@ func (s *Store) ConfirmAccount(code, fp, handle string) (string, string, error) 
 		return "", "", fmt.Errorf("账号错误或密钥不匹配")
 	}
 	var target string
-	if err = s.db.QueryRow(`SELECT account_id FROM challenges WHERE code_hash=?`, hash(code)).Scan(&target); err != nil || target != a.ID {
+	if err = s.db.QueryRow(`SELECT account_id FROM challenges WHERE code_hash=? AND purpose IN ('login','link')`, hash(code)).Scan(&target); err != nil || target != a.ID {
 		return "", "", fmt.Errorf("验证码不属于此账号或已过期")
 	}
 	return s.Confirm(code, fp)
