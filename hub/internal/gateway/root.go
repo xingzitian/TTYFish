@@ -141,10 +141,9 @@ func (r *Root) enter(gameID string) error {
 	if !ok {
 		return fmt.Errorf("没有这个游戏")
 	}
+	// 只建客户端，不建房：建房还是加入房间，由游戏界面自己问玩家
+	// （UNO 的第一屏就是"输入房间码加入 / 直接回车开新房"）。
 	conn := remote.New(r.deps.Backend, r.deps.Player.Token, gameID)
-	if err := conn.Join(""); err != nil {
-		return err
-	}
 	r.conn = conn
 	r.game = entry.NewUI(registry.UIContext{
 		Key: "account:" + r.deps.Player.Account.ID, Name: r.deps.Player.Account.Username,
