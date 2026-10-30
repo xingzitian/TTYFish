@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # 服务器侧的部署脚本：把指定 tag 的 Release 资产换上来。
 #
-#   /opt/ttyfish/deploy.sh v0.1.5
+#   /opt/ttyfish/deploy.sh v0.1.6
 #
-# 由 CI 通过 SSH 调用（也方便手动执行）。两件事：
-#   1. 下载并替换两个二进制：backend（账号+房间）和 hub（SSH 网关）
-#   2. 重启两个服务，逐个健康检查，失败自动回滚
+# 由 CI 通过 SSH 调用（也方便手动执行）。三样东西：
+#   1. backend  账号 + 房间 + 规则
+#   2. 前端    解到 /opt/1panel/www/sites/TTYFish/index（1Panel 的站点目录）
+#   3. hub      SSH 网关
+#
+# 顺序是"后端 → 前端 → 网关"：前端要用后端的新接口，所以排在后端之后；
+# 网关重启会踢掉正在玩的人，所以压在最后。
 #
 # 不在生产机上编译，也不从 CI 传几十 MB 的二进制过来——这个方向跨境只有几十 KB/s，
 # 让服务器经本机 mihomo 从 GitHub Release 拉才是秒级。
@@ -13,13 +17,16 @@ set -uo pipefail
 
 TAG=${1:-}
 if [ -z "$TAG" ]; then
-	echo "用法: $0 <tag>（例如 v0.1.5）" >&2
+	echo "用法: $0 <tag>（例如 v0.1.6）" >&2
 	exit 2
 fi
 
 REPO="xingzitian/TTYFish"
 BIN_DIR="/opt/ttyfish"
+# 前端正本放在 1Panel 的站点目录里：openresty 跑在容器里，只挂载了 /opt/1panel/www
+WEB_DIR="/opt/1panel/www/sites/TTYFish/index"
 SSH_PORT=12331
+WEB_PORT=12332
 BACKEND_HEALTH="http://127.0.0.1:8082/healthz"
 PROXY="http://127.0.0.1:7890"
 
@@ -67,11 +74,22 @@ for name in backend hub; do
 	chmod +x "$TMP/$name"
 done
 
-# 两个二进制一起换好，再按"先后端、后网关"的顺序重启
-for name in backend hub; do
-	[ -f "$BIN_DIR/$name" ] && cp -p "$BIN_DIR/$name" "$BIN_DIR/$name.prev"
-	mv "$TMP/$name" "$BIN_DIR/$name"
-done
+# 前端单独下：没有这个资产就只更新二进制（老版本 Release 没有 web.tar.gz）
+HAS_WEB=0
+if fetch "$BASE/web.tar.gz" "$TMP/web.tar.gz"; then
+	if tar -tzf "$TMP/web.tar.gz" >/dev/null 2>&1; then
+		HAS_WEB=1
+	else
+		log "web.tar.gz 下载下来不是有效压缩包，跳过前端"
+	fi
+else
+	log "这个 Release 没有 web.tar.gz，跳过前端"
+fi
+
+# ---- 1. 后端 ----
+log "替换后端"
+[ -f "$BIN_DIR/backend" ] && cp -p "$BIN_DIR/backend" "$BIN_DIR/backend.prev"
+mv "$TMP/backend" "$BIN_DIR/backend"
 
 log "重启后端"
 sudo -n systemctl restart ttyfish-backend
@@ -84,19 +102,57 @@ for _ in $(seq 1 10); do
 	sleep 1
 done
 if [ "$ok" -ne 1 ]; then
-	log "后端没起来，回滚两个二进制"
-	for name in backend hub; do
-		[ -f "$BIN_DIR/$name.prev" ] && mv "$BIN_DIR/$name.prev" "$BIN_DIR/$name"
-	done
+	log "后端没起来，回滚二进制"
+	[ -f "$BIN_DIR/backend.prev" ] && mv "$BIN_DIR/backend.prev" "$BIN_DIR/backend"
 	sudo -n systemctl restart ttyfish-backend
-	sudo -n systemctl restart ttyfish
 	exit 1
 fi
 log "后端健康"
 
+# ---- 2. 前端 ----
+if [ "$HAS_WEB" -eq 1 ]; then
+	log "替换前端"
+	rm -rf "$WEB_DIR.new"
+	mkdir -p "$WEB_DIR.new"
+	if ! tar -xzf "$TMP/web.tar.gz" -C "$WEB_DIR.new"; then
+		log "解包失败，前端保持原样"
+		rm -rf "$WEB_DIR.new"
+		exit 1
+	fi
+	# 先解到 .new 再整体换，避免 nginx 读到解了一半的目录
+	rm -rf "$WEB_DIR.prev"
+	[ -d "$WEB_DIR" ] && mv "$WEB_DIR" "$WEB_DIR.prev"
+	mv "$WEB_DIR.new" "$WEB_DIR"
+	chmod -R a+rX "$WEB_DIR"
+
+	ok=0
+	for _ in $(seq 1 5); do
+		code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 --noproxy '*' "http://127.0.0.1:$WEB_PORT/")
+		deep=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 --noproxy '*' "http://127.0.0.1:$WEB_PORT/account")
+		if [ "$code" = "200" ] && [ "$deep" = "200" ]; then
+			ok=1
+			break
+		fi
+		sleep 1
+	done
+	if [ "$ok" -ne 1 ]; then
+		log "前端起不来（首页 $code / 深链 $deep），回滚"
+		rm -rf "$WEB_DIR"
+		[ -d "$WEB_DIR.prev" ] && mv "$WEB_DIR.prev" "$WEB_DIR"
+		exit 1
+	fi
+	log "前端健康"
+else
+	log "跳过前端"
+fi
+
+# ---- 3. 网关 ----
+log "替换网关"
+[ -f "$BIN_DIR/hub" ] && cp -p "$BIN_DIR/hub" "$BIN_DIR/hub.prev"
+mv "$TMP/hub" "$BIN_DIR/hub"
+
 log "重启网关"
 sudo -n systemctl restart ttyfish
-
 ok=0
 for _ in $(seq 1 10); do
 	if systemctl is-active --quiet ttyfish; then

@@ -39,17 +39,51 @@ docs/         需求、架构、游戏开发指南、部署、前端
 
 ## 跑起来
 
-```bash
-# 平台（会挂上 uno）
-cd hub
-go run ./cmd/hub -addr :2222 -host-key host_ed25519
+本地跑要起**两个进程**（一个是后端 API，一个是 SSH 网关）：
 
-# 另开一个终端
-ssh -p 2222 你的名字@127.0.0.1
+```bash
+# 1. 后端：账号、房间、UNO 规则
+cd hub
+TTYFISH_GATEWAY_TOKEN=dev-token go run ./cmd/backend -addr 127.0.0.1:8081
+
+# 2. 网关：只渲染，不跑规则
+TTYFISH_GATEWAY_TOKEN=dev-token go run ./cmd/hub \
+    -addr :2222 -backend http://127.0.0.1:8081
+
+# 3. 前端（开发模式，代理到 8081）
+cd web && npm run dev
 ```
 
-游戏规则开关（叠加、罚牌、长局、质疑）都在 `hub` 的命令行上，
-具体见 `-h`。
+两个进程的 `TTYFISH_GATEWAY_TOKEN` 必须**是同一个值**：后端用它签发玩家令牌，
+网关用它换令牌。
+
+## 服务器上的启动参数（改之前先看这段）
+
+生产环境用 systemd 托管，**unit 是手工放的、不在本仓库里**。改参数请直接改线上文件：
+
+`/etc/systemd/system/ttyfish-backend.service`
+
+```ini
+EnvironmentFile=/etc/ttyfish/gateway.env
+ExecStart=/opt/ttyfish/backend -addr 127.0.0.1:8082 -db /var/lib/ttyfish/backend.db -cors-origins http://159.75.78.7:12332
+```
+
+`/etc/systemd/system/ttyfish.service`
+
+```ini
+EnvironmentFile=/etc/ttyfish/gateway.env
+ExecStart=/opt/ttyfish/hub -addr :12331 -host-key /var/lib/ttyfish/host_ed25519 -backend http://127.0.0.1:8082
+```
+
+⚠️ **`-cors-origins` 不能删**。浏览器发 POST 时**即使同源也会带 `Origin` 头**，
+后端只认白名单——删了之后网页登录会直接 403 `origin_denied`，
+而且报错出现在浏览器里，很难联想到是这个参数。
+
+`/etc/ttyfish/gateway.env` 里放 `TTYFISH_GATEWAY_TOKEN=<随机串>`，两个服务共用。
+
+前端静态文件的正本是 `/opt/1panel/www/sites/TTYFish/index`——openresty 跑在**容器**里，
+只挂载了 `/opt/1panel/www`，文件放别处它**看不见**（曾经把文件放 `/opt/ttyfish/web`
+再软链过去，容器里是断链，直接 500）。部署脚本直接写这个目录。
 
 ---
 

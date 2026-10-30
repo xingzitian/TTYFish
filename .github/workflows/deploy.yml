@@ -35,6 +35,13 @@ jobs:
           go-version: '1.26.x'
           cache-dependency-path: hub/go.sum
 
+      # 和 ci.yml 用同一个 Node 版本，避免"CI 能过、发布时构建出别的产物"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
       # 两个二进制：后端（账号+房间+规则）和 SSH 网关
       - name: 编译 linux/amd64
         working-directory: hub
@@ -52,13 +59,27 @@ jobs:
           sha256sum backend-linux-amd64 > backend-linux-amd64.sha256
           cat *.sha256
 
+      # 前端：构建时把 SSH 地址写进产物（登录页那条 ssh 命令用的就是它）
+      - name: 构建前端
+        run: |
+          set -euo pipefail
+          cd web
+          npm ci
+          echo "SSH 地址：$VITE_SSH_HOST:$VITE_SSH_PORT"
+          VITE_SSH_HOST="$VITE_SSH_HOST" VITE_SSH_PORT="$VITE_SSH_PORT" npm run build
+          tar -czf ../dist/web.tar.gz -C dist .
+          ls -lh ../dist/web.tar.gz
+        env:
+          VITE_SSH_HOST: ${{ vars.TTYFISH_SSH_HOST || '159.75.78.7' }}
+          VITE_SSH_PORT: ${{ vars.TTYFISH_SSH_PORT || '12331' }}
+
       - name: 建 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          ASSETS="dist/hub-linux-amd64 dist/hub-linux-amd64.sha256 dist/backend-linux-amd64 dist/backend-linux-amd64.sha256"
+          ASSETS="dist/hub-linux-amd64 dist/hub-linux-amd64.sha256 dist/backend-linux-amd64 dist/backend-linux-amd64.sha256 dist/web.tar.gz"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release 已存在，补传资产"
             gh release upload "$TAG" $ASSETS --clobber
