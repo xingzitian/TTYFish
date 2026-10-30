@@ -32,6 +32,9 @@ type Deps struct {
 	Mode       sdkui.ColorMode
 	ModeOf     func(string) (sdkui.ColorMode, bool)
 	SetMode    func(string, sdkui.ColorMode)
+	Layout     sdkui.Layout
+	LayoutOf   func(string) (sdkui.Layout, bool)
+	SetLayout  func(string, sdkui.Layout)
 	Renderer   *lipgloss.Renderer
 	ResumeMode bool // true 表示进来时先尝试恢复原房间
 }
@@ -80,6 +83,7 @@ func (r *Root) resume() bool {
 		Key: "account:" + r.deps.Player.Account.ID, Name: r.deps.Player.Account.Username,
 		Client: conn, Output: r.deps.Output, Term: r.deps.Term,
 		Mode: r.deps.Mode, ModeOf: r.deps.ModeOf, SetMode: r.deps.SetMode,
+		Layout: r.deps.Layout, LayoutOf: r.deps.LayoutOf, SetLayout: r.deps.SetLayout,
 	})
 	slog.Info("恢复房间", "account", r.deps.Player.Account.ID, "game", entry.ID)
 	return true
@@ -149,6 +153,7 @@ func (r *Root) enter(gameID string) error {
 		Key: "account:" + r.deps.Player.Account.ID, Name: r.deps.Player.Account.Username,
 		Client: conn, Output: r.deps.Output, Term: r.deps.Term,
 		Mode: r.deps.Mode, ModeOf: r.deps.ModeOf, SetMode: r.deps.SetMode,
+		Layout: r.deps.Layout, LayoutOf: r.deps.LayoutOf, SetLayout: r.deps.SetLayout,
 	})
 	slog.Info("进入游戏", "account", r.deps.Player.Account.ID, "game", gameID)
 	return nil

@@ -1,5 +1,6 @@
 # 编译产物
 /hub/hub
+/hub/play
 /games/uno/uno
 *.exe
 
@@ -15,6 +16,6 @@ uno-prefs.json
 .env
 .DS_Store
 
-# CI 产物
+# 构建产物
 /dist/
-
+/dist-test/

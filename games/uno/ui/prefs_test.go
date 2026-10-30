@@ -11,9 +11,10 @@ import (
 
 // fakeClient 是最小可用的 Client：只用来测界面的偏好恢复和按键。
 type fakeClient struct {
-	snap   client.Snapshot
-	ch     chan client.Snapshot
-	joined string
+	snap    client.Snapshot
+	ch      chan client.Snapshot
+	started bool
+	joined  string
 }
 
 func newFakeClient() *fakeClient {
@@ -24,7 +25,7 @@ func (f *fakeClient) Snapshot() client.Snapshot       { return f.snap }
 func (f *fakeClient) Updates() <-chan client.Snapshot { return f.ch }
 func (f *fakeClient) Join(code string) error          { f.joined = code; return nil }
 func (f *fakeClient) Leave() error                    { return nil }
-func (f *fakeClient) Start() error                    { return nil }
+func (f *fakeClient) Start() error                    { f.started = true; return nil }
 func (f *fakeClient) AddBot() error                   { return nil }
 func (f *fakeClient) Act(a any) error                 { return nil }
 func (f *fakeClient) Chat(i int) error                { return nil }

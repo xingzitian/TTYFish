@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -24,6 +25,10 @@ func setObs(snap *client.Snapshot, f func(o *engine.Observation)) {
 }
 
 // testModel 直接拼一帧快照来测渲染，不依赖真实房间的时序。
+//
+// 注意：房间码输入框必须像 NewModel 那样建好。手搓一个零值 textinput 的
+// Model 在退房时会因为光标模型没初始化而 panic——那是测试脚手架的问题，
+// 不是产品问题，但会把用例带到沟里。
 func testModel(t *testing.T, w int, snap client.Snapshot) *Model {
 	t.Helper()
 	m := &Model{
@@ -32,6 +37,12 @@ func testModel(t *testing.T, w int, snap client.Snapshot) *Model {
 		height:   24,
 		snap:     snap,
 	}
+	in := textinput.New()
+	in.Prompt = ""
+	in.CharLimit = 6
+	in.Width = 8
+	in.Focus()
+	m.codeInput = in
 	return m
 }
 

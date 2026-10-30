@@ -31,6 +31,11 @@ type Options struct {
 	// 换个连接不该被重置回服务端默认值。
 	ModeOf  func(key string) (ui.ColorMode, bool)
 	SetMode func(key string, m ui.ColorMode)
+
+	// 界面密度：丰富（默认）还是极简。和颜色深浅一样按账号记住。
+	Layout    ui.Layout
+	LayoutOf  func(key string) (ui.Layout, bool)
+	SetLayout func(key string, l ui.Layout)
 }
 
 type snapMsg client.Snapshot
@@ -61,8 +66,11 @@ type Model struct {
 	codeInput textinput.Model
 	enterErr  string
 
-	chat     bool
-	boss     bool
+	chat bool
+	boss bool
+	// errAt 是最后一条错误的时间。极简模式的 CMD 行只在 2 秒内显示错误，
+	// 否则玩家会以为"只剩下这一句"，不知道还能按什么。
+	errAt    time.Time
 	choosing bool
 	pending  engine.Card
 	mode     ui.ColorMode
@@ -70,7 +78,12 @@ type Model struct {
 	width    int
 	height   int
 	layout   layoutKind
-	errMsg   string
+
+	// 极简模式
+	minimal      bool
+	page         int
+	playersUntil time.Time
+	errMsg       string
 }
 
 // NewModel 创建界面模型。
@@ -86,6 +99,12 @@ func NewModel(id Identity, c client.Client, opts Options, r *lipgloss.Renderer) 
 	if opts.ModeOf != nil {
 		if f, ok := opts.ModeOf(id.Key); ok {
 			m.mode = f
+		}
+	}
+	m.minimal = opts.Layout == ui.LayoutCompact
+	if opts.LayoutOf != nil {
+		if l, ok := opts.LayoutOf(id.Key); ok {
+			m.minimal = l == ui.LayoutCompact
 		}
 	}
 
@@ -159,6 +178,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, waitFor(m.sub)
 
+	case hidePlayersMsg:
+		m.playersUntil = time.Time{}
+		return m, nil
+
 	case closedMsg:
 		m.closed = true
 		return m, nil
@@ -201,14 +224,20 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 			idx := int(key[0] - '1')
 			if idx < len(client.Presets) && m.c != nil {
 				if err := m.c.Chat(idx); err != nil {
-					m.errMsg = err.Error()
+					m.fail(err.Error())
 				} else {
-					m.errMsg = ""
+					m.fail("")
 				}
 			}
 			m.chat = false
 		}
 		return nil
+	}
+
+	// 极简模式：数字直接出牌、左右翻页，其余交给共用表。
+	// 放在选色之后，因为选色/聊天是两种模式共用的模态状态。
+	if m.minimal && !m.choosing && m.snap.Phase == client.Playing {
+		return m.handleCompactKey(key)
 	}
 
 	// 变色牌选色是模态的，优先级最高。
@@ -235,6 +264,10 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	case "t":
 		m.chat = true
 		return nil
+	case "i":
+		// 切换丰富 / 极简，和颜色深浅一样记住
+		m.toggleLayout()
+		return nil
 	case "m":
 		// 换全局颜色深浅：满色 / 只给文字上色 / 无色。记住这个选择，
 		// 下次连上来还是你自己挑的那个。
@@ -246,9 +279,9 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	case "v":
 		if m.c != nil {
 			if err := m.c.VoteRestart(true); err != nil {
-				m.errMsg = err.Error()
+				m.fail(err.Error())
 			} else {
-				m.errMsg = ""
+				m.fail("")
 			}
 		}
 		return nil
@@ -262,17 +295,17 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		}
 		if m.snap.IsHost && m.c != nil {
 			switch key {
-			case "b":
+			case "b", "c":
 				if err := m.c.AddBot(); err != nil {
-					m.errMsg = err.Error()
+					m.fail(err.Error())
 				} else {
-					m.errMsg = ""
+					m.fail("")
 				}
 			case "s":
 				if err := m.c.Start(); err != nil {
-					m.errMsg = err.Error()
+					m.fail(err.Error())
 				} else {
-					m.errMsg = ""
+					m.fail("")
 				}
 			}
 		}
@@ -317,7 +350,7 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		if obs.UnoPending >= 0 {
 			m.act(engine.CatchUno{Seat: m.snap.MySeat, Target: obs.UnoPending})
 		} else {
-			m.errMsg = "现在没有人漏喊 UNO"
+			m.fail("现在没有人漏喊 UNO")
 		}
 	default:
 		if len(key) == 1 && key[0] >= '0' && key[0] <= '9' {
@@ -383,11 +416,11 @@ func (m *Model) playSelected() {
 	if c.Kind == engine.Wild || c.Kind == engine.WildDrawFour {
 		m.choosing = true
 		m.pending = c
-		m.errMsg = ""
+		m.fail("")
 		return
 	}
 	if !m.canPlay(c.ID) {
-		m.errMsg = "这张牌现在出不了：颜色和数字都对不上"
+		m.fail("这张牌现在出不了：颜色和数字都对不上")
 		return
 	}
 	m.act(engine.PlayCard{
@@ -417,15 +450,21 @@ func (m *Model) canPlay(cardID int) bool {
 	return false
 }
 
+// fail 记一条错误，并打上时间戳（极简模式的 CMD 行只显示 2 秒）。
+func (m *Model) fail(msg string) {
+	m.errMsg = msg
+	m.errAt = time.Now()
+}
+
 func (m *Model) act(a engine.Action) {
 	if m.c == nil {
 		return
 	}
 	if err := m.c.Act(a); err != nil {
-		m.errMsg = err.Error()
+		m.fail(err.Error())
 		return
 	}
-	m.errMsg = ""
+	m.fail("")
 	m.cursor = 0
 }
 
@@ -445,7 +484,7 @@ func (m *Model) leave() {
 	m.codeInput.SetValue("")
 	m.codeInput.Focus()
 	m.entering = true
-	m.errMsg = ""
+	m.fail("")
 }
 
 // Close 取消订阅并通知房间"我断线了"。可以重复调用。

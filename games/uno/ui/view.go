@@ -252,7 +252,15 @@ func (m *Model) render() string {
 	case m.snap.Code == "":
 		return m.dim().Render("连接中…") + "\n"
 	case m.snap.Phase != client.Playing:
+		if m.minimal {
+			return m.viewCompactLobby()
+		}
 		return m.viewLobby()
+	}
+
+	// 极简模式不参与多栏布局：它只有几行，不需要"终端太小"这一说
+	if m.minimal {
+		return m.viewCompact()
 	}
 
 	if m.tooSmall() {
@@ -448,7 +456,7 @@ func (m *Model) viewLobby() string {
 	if m.snap.IsHost {
 		keys = "s 开始 · b 补一个电脑"
 	}
-	keys += " · t 快捷语 · v 重开投票 · l 离开 · q 退出"
+	keys += " · i 界面 · t 快捷语 · v 重开投票 · l 离开 · q 退出"
 	b.WriteString(m.dim().Render(keys))
 	if m.errMsg != "" {
 		b.WriteString("\n" + m.warn().Render("! "+m.errMsg))
@@ -616,7 +624,7 @@ func (m *Model) keyLines() []string {
 		m.dim().Render("d 摸牌  p 跳过"),
 		m.dim().Render("u 喊UNO  c 抓人"),
 		m.dim().Render("t 快捷语  v 重开"),
-		m.dim().Render("m 颜色深浅  q 退出"),
+		m.dim().Render("m 颜色  i 界面  q 退出"),
 		m.dim().Render("Ctrl+B 老板键"),
 	}
 }
@@ -792,7 +800,7 @@ func (m *Model) viewStatus() string {
 	hint := "数字选牌 · Enter 出 · d 摸 · p 跳过 · u 喊UNO · t 快捷语 · q 退出"
 	if narrow {
 		// 窄屏也别把 UNO 三个字砍掉——"u喊"没人看得懂。
-		hint = "1-9选 回车出 d摸 p过 u喊UNO q退"
+		hint = "1-9选 回车出 d摸 p过 u喊UNO i界面 q退"
 	}
 	if obs.DrawnID >= 0 {
 		if narrow {

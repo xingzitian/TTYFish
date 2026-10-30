@@ -247,6 +247,7 @@ func New(cfg Config) (*ssh.Server, error) {
 					Accounts: cfg.Accounts, Backend: cfg.BackendURL, Registry: cfg.Games,
 					Player: player, Output: s, Term: term,
 					Mode: cfg.Mode, ModeOf: pref.mode, SetMode: pref.setMode,
+					Layout: sdkui.LayoutRich, LayoutOf: pref.layout, SetLayout: pref.setLayout,
 					Renderer: cfg.NewRenderer(s, term), ResumeMode: true,
 				})
 

@@ -26,6 +26,9 @@ type UIContext struct {
 	Mode      ui.ColorMode
 	ModeOf    func(string) (ui.ColorMode, bool)
 	SetMode   func(string, ui.ColorMode)
+	Layout    ui.Layout
+	LayoutOf  func(string) (ui.Layout, bool)
+	SetLayout func(string, ui.Layout)
 }
 
 // Entry 将游戏标识、规则实现和界面工厂绑定在一起，由组装入口创建。

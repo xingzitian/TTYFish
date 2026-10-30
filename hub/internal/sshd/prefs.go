@@ -4,26 +4,36 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 
 	sdkui "github.com/xingzitian/TTYFish/sdk/ui"
 )
 
-// prefs 记每个玩家的个人偏好，按公钥指纹索引，落盘成一个很小的 JSON。
+// prefs 记每个玩家的个人偏好，按账号索引，落盘成一个很小的 JSON。
 //
 // 渲染虽然发生在服务端（每个会话单独算一帧 ANSI 发给终端），但"用哪种牌面"
-// 是玩家自己的选择，不该因为换条连接就被重置回服务端默认值。
+// 和"界面要多精简"是玩家自己的选择，不该因为换条连接就被重置回服务端默认值。
 //
 // 读写失败一律降级：偏好读不出来就当没设置过，写不进去只记日志——
 // 一个显示偏好不应该影响能不能打牌。
 type prefs struct {
 	mu    sync.Mutex
 	path  string
-	faces map[string]string
+	items map[string]prefEntry
+}
+
+// prefEntry 是一个账号的偏好。
+//
+// 老版本只存了颜色（JSON 里直接是字符串），所以解析时要兼容两种形状，
+// 否则升级后所有人的牌面设置都会被清掉。
+type prefEntry struct {
+	Mode   string `json:"mode,omitempty"`
+	Layout string `json:"layout,omitempty"`
 }
 
 func loadPrefs(path string) *prefs {
-	p := &prefs{path: path, faces: map[string]string{}}
+	p := &prefs{path: path, items: map[string]prefEntry{}}
 	if path == "" {
 		return p
 	}
@@ -31,25 +41,40 @@ func loadPrefs(path string) *prefs {
 	if err != nil {
 		return p
 	}
-	stored := map[string]string{}
+
+	var stored map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &stored); err != nil {
 		slog.Warn("偏好文件解析失败，本次按默认处理", "path", path, "err", err)
 		return p
 	}
-	p.faces = stored
+	for key, value := range stored {
+		trimmed := strings.TrimSpace(string(value))
+		if strings.HasPrefix(trimmed, "{") {
+			var e prefEntry
+			if err := json.Unmarshal(value, &e); err == nil {
+				p.items[key] = e
+			}
+			continue
+		}
+		// 老格式：直接是一个颜色名
+		var mode string
+		if err := json.Unmarshal(value, &mode); err == nil {
+			p.items[key] = prefEntry{Mode: mode}
+		}
+	}
 	return p
 }
 
-// face 返回这个身份上次选的牌面样式；没选过时 ok=false，交给服务端默认值。
+// mode 返回这个账号上次选的颜色深浅；没选过时 ok=false，交给默认值。
 func (p *prefs) mode(key string) (sdkui.ColorMode, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	slug, exists := p.faces[key]
-	if !exists {
+	e, exists := p.items[key]
+	if !exists || e.Mode == "" {
 		return sdkui.ColorBlock, false
 	}
-	f, valid := sdkui.ParseColorMode(slug)
+	f, valid := sdkui.ParseColorMode(e.Mode)
 	if !valid {
 		return sdkui.ColorBlock, false
 	}
@@ -60,7 +85,35 @@ func (p *prefs) setMode(key string, f sdkui.ColorMode) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	p.faces[key] = f.Slug()
+	e := p.items[key]
+	e.Mode = f.Slug()
+	p.items[key] = e
+	p.flushLocked()
+}
+
+// layout 返回这个账号上次选的界面密度。
+func (p *prefs) layout(key string) (sdkui.Layout, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	e, exists := p.items[key]
+	if !exists || e.Layout == "" {
+		return sdkui.LayoutRich, false
+	}
+	l, valid := sdkui.ParseLayout(e.Layout)
+	if !valid {
+		return sdkui.LayoutRich, false
+	}
+	return l, true
+}
+
+func (p *prefs) setLayout(key string, l sdkui.Layout) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	e := p.items[key]
+	e.Layout = l.Slug()
+	p.items[key] = e
 	p.flushLocked()
 }
 
@@ -69,7 +122,7 @@ func (p *prefs) flushLocked() {
 	if p.path == "" {
 		return
 	}
-	raw, err := json.MarshalIndent(p.faces, "", "  ")
+	raw, err := json.MarshalIndent(p.items, "", "  ")
 	if err != nil {
 		return
 	}
