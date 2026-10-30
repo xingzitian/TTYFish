@@ -91,6 +91,10 @@ func (Codec) DecodeAction(kind string, raw json.RawMessage, seat int) (any, erro
 	}
 }
 
+// EncodeAction exposes the wire form for clients (the SSH gateway needs it to
+// turn a local engine.Action into the JSON the API expects).
+func (Codec) EncodeAction(a engine.Action) Action { return encodeAction(a) }
+
 func encodeAction(a engine.Action) Action {
 	switch v := a.(type) {
 	case engine.PlayCard:
