@@ -41,10 +41,12 @@ jobs:
 
       - name: 上传并切换
         env:
-          SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          HOST: ${{ secrets.SSH_HOST }}
-          USER: ${{ secrets.SSH_USER }}
-          PORT: ${{ secrets.SSH_PORT }}
+          # 私钥存在仓库 secret TTYFISH_DEPLOY 里。
+          # 主机、用户、端口不是秘密，直接写在 workflow 里。
+          SSH_KEY: ${{ secrets.TTYFISH_DEPLOY }}
+          HOST: 159.75.78.7
+          USER: deploy
+          PORT: '22'
         run: |
           set -euo pipefail
           PORT="${PORT:-22}"
@@ -96,9 +98,9 @@ jobs:
 
       - name: 部署后验证
         env:
-          HOST: ${{ secrets.SSH_HOST }}
-          USER: ${{ secrets.SSH_USER }}
-          PORT: ${{ secrets.SSH_PORT }}
+          HOST: 159.75.78.7
+          USER: deploy
+          PORT: '22'
         run: |
           set -euo pipefail
           PORT="${PORT:-22}"
