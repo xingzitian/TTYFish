@@ -32,30 +32,31 @@ PROXY="http://127.0.0.1:7890"
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
-# 下载一个资产：先走 mihomo，失败再直连，整体重试 3 轮。
+# 下载一个资产。
 #
-# 为什么重试：2026-11-02 那次发布，代理抖了一下（SSL_ERROR_SYSCALL），
-# 直连又因为只有 5KB/s 被 HTTP/2 直接掐断，整个部署就失败了。下载失败属于
-# 环境问题，不该让一次发布白跑。
+# 顺序是有讲究的：**先多试几轮代理**，直连只当最后手段。
 #
-# 直连强制 HTTP/1.1：那条 "HTTP/2 stream was not closed cleanly" 就是 h2 在半路断了。
+# 实测：走本机 mihomo 是 1.9MB/s（11MB 的包 6 秒），直连只有 5KB/s（要 40 分钟）。
+# 2026-11-02 两次发布都栽在这——代理抖一下（SSL_ERROR_SYSCALL），脚本立刻退到直连，
+# 然后在那里干等 5 分钟，整次发布失败。代理本身几秒就恢复了，多试几次就过去了。
 fetch() {
 	local url=$1
 	local out=$2
 	local attempt
 
-	for attempt in 1 2 3; do
-		if curl -fsSL --max-time 300 -o "$out" "$url"; then
+	for attempt in 1 2 3 4 5; do
+		# --retry-all-errors 把 TLS 握手被掐、连接重置也算作可重试
+		if curl -fsSL --retry 2 --retry-delay 2 --retry-all-errors --max-time 120 -o "$out" "$url"; then
 			return 0
 		fi
-		log "第 $attempt 轮经代理失败，改直连重试"
-		if curl -fsSL --http1.1 --max-time 300 --noproxy '*' -o "$out" "$url"; then
-			return 0
-		fi
-		log "第 $attempt 轮直连也失败"
-		sleep $((attempt * 3))
+		log "第 $attempt 轮经代理失败，2 秒后重试"
+		sleep 2
 	done
-	return 1
+
+	# 直连只在代理彻底不可用时试一次，而且只等 60 秒——
+	# 这个速度根本下不完大文件，等下去只是白白拖长失败时间。
+	log "代理 5 轮都失败，试直连（很慢，最多等 60 秒）"
+	curl -fsSL --http1.1 --max-time 60 --noproxy '*' -o "$out" "$url"
 }
 
 # 发版是自己挑的时间窗口，有人在玩也照推——只留一行日志方便事后对账
