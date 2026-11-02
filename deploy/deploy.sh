@@ -32,13 +32,30 @@ PROXY="http://127.0.0.1:7890"
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
-# 优先走 mihomo；代理不通就直连再试一次
+# 下载一个资产：先走 mihomo，失败再直连，整体重试 3 轮。
+#
+# 为什么重试：2026-11-02 那次发布，代理抖了一下（SSL_ERROR_SYSCALL），
+# 直连又因为只有 5KB/s 被 HTTP/2 直接掐断，整个部署就失败了。下载失败属于
+# 环境问题，不该让一次发布白跑。
+#
+# 直连强制 HTTP/1.1：那条 "HTTP/2 stream was not closed cleanly" 就是 h2 在半路断了。
 fetch() {
-	if curl -fsSL --max-time 300 -o "$2" "$1"; then
-		return 0
-	fi
-	log "经代理失败，改直连重试"
-	curl -fsSL --max-time 300 --noproxy '*' -o "$2" "$1"
+	local url=$1
+	local out=$2
+	local attempt
+
+	for attempt in 1 2 3; do
+		if curl -fsSL --max-time 300 -o "$out" "$url"; then
+			return 0
+		fi
+		log "第 $attempt 轮经代理失败，改直连重试"
+		if curl -fsSL --http1.1 --max-time 300 --noproxy '*' -o "$out" "$url"; then
+			return 0
+		fi
+		log "第 $attempt 轮直连也失败"
+		sleep $((attempt * 3))
+	done
+	return 1
 }
 
 # 发版是自己挑的时间窗口，有人在玩也照推——只留一行日志方便事后对账
