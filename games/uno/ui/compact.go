@@ -210,6 +210,39 @@ func (m *Model) compactToken(c engine.Card, marked bool) string {
 	return st.Render(text)
 }
 
+// viewCompactEnter 是极简模式的输房间码界面：两行。
+func (m *Model) viewCompactEnter() string {
+	line := m.dim().Render("[ROOM] 房间码 ") + m.codeInput.View() +
+		m.dim().Render("  （回车开新房）")
+	if m.enterErr != "" {
+		line += m.warn().Render("  ! " + shortName(m.enterErr, 30))
+	}
+	cmd := m.dim().Render("[CMD] [1-6]输入 [⏎]进入 [Esc]清空")
+	return line + "\n" + cmd
+}
+
+// viewCompactChat 把快捷语压成两行。
+func (m *Model) viewCompactChat() string {
+	items := make([]string, 0, len(client.Presets))
+	for i, p := range client.Presets {
+		items = append(items, fmt.Sprintf("%d.%s", i+1, shortName(p, 12)))
+	}
+	body := "[CHAT] " + strings.Join(items, " ")
+	for len([]rune(body)) > m.width && len(items) > 1 {
+		items = items[:len(items)-1]
+		body = "[CHAT] " + strings.Join(items, " ")
+	}
+	return m.plain().Render(body)
+}
+
+// viewCompactSetup 是首次登录的一次性选择：问完记住，以后不再弹。
+func (m *Model) viewCompactSetup() string {
+	line := m.turn().Render("[SETUP] 第一次来，选个界面：") +
+		m.plain().Render(" [1]丰富（信息全）  [2]极简（摸鱼用）")
+	hint := m.dim().Render("[CMD] 选完会记住，之后按 I 随时切换")
+	return line + "\n" + hint
+}
+
 // viewCompactLobby 是极简模式的等候界面。
 //
 // 和牌桌共用一个 minimal 开关：在大厅按 i 切到极简，进牌桌还是极简，
@@ -241,7 +274,7 @@ func (m *Model) viewCompactLobby() string {
 	}
 
 	if m.chat {
-		lines = append(lines, strings.Split(m.viewChat(), "\n")...)
+		lines = append(lines, m.viewCompactChat())
 	}
 	lines = append(lines, m.dim().Render(m.compactLobbyCmd()))
 
@@ -312,7 +345,7 @@ func (m *Model) viewCompact() string {
 
 	if m.chat {
 		// 聊天菜单是模态的，极简模式也得画出来，不然按 t 像死了一样
-		lines = append(lines, strings.Split(m.viewChat(), "\n")...)
+		lines = append(lines, m.viewCompactChat())
 	} else if m.playersVisible() {
 		lines = append(lines, m.compactPlayers(obs)...)
 	} else if msg := m.compactFeed(); msg != "" {
@@ -387,6 +420,9 @@ func (m *Model) seatBadge(obs engine.Observation, seat int) string {
 
 func (m *Model) compactPile(obs engine.Observation) string {
 	body := m.compactToken(obs.Top, false)
+	// 当前生效的颜色必须显示：打了万能牌之后，光看牌面 [W|+4] 根本不知道
+	// 下家该出什么色，这是极简模式最早漏掉的一处信息。
+	body += " 当前色 " + m.colorChip(obs.Active)
 	who := m.lastPlayer(obs)
 	if who != "" {
 		body += "  (上一手: " + shortName(who, 10) + " 打出)"
@@ -533,6 +569,17 @@ func (m *Model) lastPlayer(obs engine.Observation) string {
 		return ""
 	}
 	return m.name(last.Seat)
+}
+
+// applyLayout 落定一个界面密度选择：记下来，之后不再问。
+//
+// 名字不能叫 chooseLayout —— view.go 里已经有一个同名方法用来选多栏布局。
+func (m *Model) applyLayout(l ui.Layout) {
+	m.minimal = l == ui.LayoutCompact
+	m.needLayoutChoice = false
+	if m.opts.SetLayout != nil {
+		m.opts.SetLayout(m.id.Key, l)
+	}
 }
 
 // toggleLayout 在丰富/极简之间切换，并记住这个选择。

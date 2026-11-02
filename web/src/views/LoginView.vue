@@ -88,7 +88,7 @@ function schedulePoll(delay: number): void {
     } catch (err) {
       // 网络抖动：不要立刻放弃，退避后再试
       if (err instanceof ApiError && err.status === 429) {
-        ElMessage.warning('请求太频繁，稍等一下')
+        ElMessage.warning(err.retryAfter ? `请求太频繁，请等 ${err.retryAfter} 秒` : '请求太频繁，稍等一下')
         schedulePoll(current.poll_interval_ms * 2)
         return
       }

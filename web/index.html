@@ -1,9 +1,24 @@
 <!doctype html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>TTYFish</title>
+    <script>
+      // 在首屏渲染前就把主题类打上，避免深色页面先闪一下白。
+      // 取值规则必须和 src/stores/theme.ts 保持一致（默认深色）。
+      ;(function () {
+        var theme = 'dark'
+        try {
+          var saved = localStorage.getItem('ttyfish-theme')
+          if (saved === 'light' || saved === 'dark') theme = saved
+        } catch (e) {
+          /* 隐私模式下读不到，用默认值 */
+        }
+        if (theme === 'dark') document.documentElement.classList.add('dark')
+        document.documentElement.style.colorScheme = theme
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

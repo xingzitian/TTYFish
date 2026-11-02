@@ -239,7 +239,12 @@ func (m *Model) render() string {
 	}
 
 	switch {
+	case m.needLayoutChoice:
+		return m.viewCompactSetup()
 	case m.entering:
+		if m.minimal {
+			return m.viewCompactEnter()
+		}
 		return m.viewEnter()
 	case m.closed && m.quitting:
 		// 自己按 q 退出：什么都不画。画一句"连接已断开"只会吓自己一跳。

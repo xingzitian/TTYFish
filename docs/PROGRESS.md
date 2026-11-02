@@ -25,17 +25,17 @@
 | ✅ | `POST /api/v1/me/keys` | 添加公钥 |
 | ✅ | `DELETE /api/v1/me/keys/{fingerprint}` | 删除公钥 |
 | ✅ | `POST /api/v1/auth/logout` | 退出 |
-| ⬜ | `GET /api/v1/me/keys/{fingerprint}` | 单个公钥详情与最后使用时间 |
-| ⬜ | `PATCH /api/v1/me/keys/{fingerprint}` | 修改密钥名称 |
-| ⬜ | `GET /api/v1/me/sessions` | 登录会话列表 |
-| ⬜ | `DELETE /api/v1/me/sessions/{id}` | 退出指定登录 |
-| ⬜ | `POST /api/v1/me/sessions/revoke-others` | 退出其他登录 |
+| ✅ | `GET /api/v1/me/keys/{fingerprint}` | 单个公钥详情与最后使用时间 |
+| ✅ | `PATCH /api/v1/me/keys/{fingerprint}` | 修改密钥名称 |
+| ✅ | `GET /api/v1/me/sessions` | 登录会话列表 |
+| ✅ | `DELETE /api/v1/me/sessions/{id}` | 退出指定登录 |
+| ✅ | `POST /api/v1/me/sessions/revoke-others` | 退出其他登录 |
 
 页面：`/login`、`/register`、`/account`。
 
-公钥列表接口已提供 name、last_used_at，前端尚未展示。密码修改接口已支持 revoke_other_sessions，前端尚未增加选项。删除公钥会自动撤销关联会话；会话撤销后现有 SSE 会失效。后端测试已覆盖跨账号隔离、并发撤销、旧数据库迁移和失败事务回滚。
+公钥列表已展示 name（可改名）和 last_used_at；账号页新增登录会话卡片，可单条退出或一次性退出其他登录；改密码时可勾选“同时退出其他设备”。删除公钥会自动撤销关联会话；会话撤销后现有 SSE 会失效。后端测试已覆盖跨账号隔离、并发撤销、旧数据库迁移和失败事务回滚。
 
-认证限流已按来源、账号、操作与已认证网关分层，支持可信代理 CIDR、网关转发玩家 IP、实际 Retry-After 秒数；预检查与正式密钥登录分别计小额度。网关 SDK 已提供等待秒数，前端等待提示可继续对接。
+认证限流已按来源、账号、操作与已认证网关分层，支持可信代理 CIDR、网关转发玩家 IP、实际 Retry-After 秒数；预检查与正式密钥登录分别计小额度。前端已读取 Retry-After，429 时直接告诉玩家还要等几秒。
 
 **有意没做**：房间类接口（游戏在终端里打，网页不做牌桌）。战绩做 M3 时再谈。
 

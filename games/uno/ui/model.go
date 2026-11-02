@@ -80,10 +80,13 @@ type Model struct {
 	layout   layoutKind
 
 	// 极简模式
-	minimal      bool
-	page         int
-	playersUntil time.Time
-	errMsg       string
+	minimal bool
+	// needLayoutChoice 表示这个账号还没选过界面密度，先问一次。
+	// 只在服务端提供了偏好读写（LayoutOf != nil）时才可能为 true。
+	needLayoutChoice bool
+	page             int
+	playersUntil     time.Time
+	errMsg           string
 }
 
 // NewModel 创建界面模型。
@@ -105,6 +108,9 @@ func NewModel(id Identity, c client.Client, opts Options, r *lipgloss.Renderer) 
 	if opts.LayoutOf != nil {
 		if l, ok := opts.LayoutOf(id.Key); ok {
 			m.minimal = l == ui.LayoutCompact
+		} else {
+			// 第一次登录：问一次，选完记住
+			m.needLayoutChoice = true
 		}
 	}
 
@@ -230,6 +236,17 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 				}
 			}
 			m.chat = false
+		}
+		return nil
+	}
+
+	// 首次登录的界面选择：只认 1 / 2，别的键一律忽略，免得误触进了牌桌
+	if m.needLayoutChoice {
+		switch key {
+		case "1":
+			m.applyLayout(ui.LayoutRich)
+		case "2":
+			m.applyLayout(ui.LayoutCompact)
 		}
 		return nil
 	}

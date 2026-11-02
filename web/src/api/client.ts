@@ -1,4 +1,12 @@
-import type { Account, ApiErrorBody, ChallengeState, Key, Session, SSHChallenge } from './types'
+import type {
+  Account,
+  ApiErrorBody,
+  ChallengeState,
+  Key,
+  Session,
+  SessionInfo,
+  SSHChallenge,
+} from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
 
@@ -8,6 +16,8 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** 429 时后端给的等待秒数（Retry-After 头），没给就是 undefined */
+    readonly retryAfter?: number,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -70,7 +80,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       new RegExp(`^${code}:\\s*`),
       '',
     )
-    throw new ApiError(res.status, code, message)
+    // 限流时后端会带 Retry-After，界面直接告诉玩家还要等几秒
+    const retryHeader = res.headers.get('Retry-After')
+    const retryAfter = retryHeader ? Number(retryHeader) : undefined
+    throw new ApiError(res.status, code, message, Number.isFinite(retryAfter) ? retryAfter : undefined)
   }
 
   return body as T
@@ -100,10 +113,11 @@ export const api = {
     return request<Account>('/api/v1/me')
   },
 
-  changePassword(password: string) {
+  /** 改密码；revokeOthers 为 true 时顺手踢掉其他设备上的登录 */
+  changePassword(password: string, revokeOthers = false) {
     return request<void>('/api/v1/me/password', {
       method: 'PUT',
-      body: JSON.stringify({ password }),
+      body: JSON.stringify({ password, revoke_other_sessions: revokeOthers }),
     })
   },
 
@@ -111,14 +125,37 @@ export const api = {
     return request<{ items: Key[] }>('/api/v1/me/keys')
   },
 
-  addKey(publicKey: string) {
-    return post<Key>('/api/v1/me/keys', { public_key: publicKey })
+  addKey(publicKey: string, name = '') {
+    return post<Key>('/api/v1/me/keys', { public_key: publicKey, name })
+  },
+
+  /** 改密钥名字；传空字符串就清掉名字 */
+  renameKey(fingerprint: string, name: string) {
+    return request<Key>(`/api/v1/me/keys/${encodeURIComponent(fingerprint)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    })
   },
 
   deleteKey(fingerprint: string) {
     return request<void>(`/api/v1/me/keys/${encodeURIComponent(fingerprint)}`, {
       method: 'DELETE',
     })
+  },
+
+  listSessions() {
+    return request<{ items: SessionInfo[] }>('/api/v1/me/sessions')
+  },
+
+  revokeSession(id: string) {
+    return request<void>(`/api/v1/me/sessions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  },
+
+  /** 退出其他所有登录，返回被撤销的条数 */
+  revokeOtherSessions() {
+    return post<{ revoked_count: number }>('/api/v1/me/sessions/revoke-others')
   },
 
   startSSHChallenge(username: string) {

@@ -1,5 +1,25 @@
+/* 颜色全部走变量：默认浅色，html.dark 覆盖成深色。
+   默认主题由 stores/theme.ts 决定（默认深色），这里只负责两套取值。 */
 :root {
+  color-scheme: light;
+  --bg: #f6f8fa;
+  --fg: #1f2328;
+  --fg-strong: #0d1117;
+  --muted: #59636e;
+  --border: #d0d7de;
+  --code-bg: #ffffff;
+  --code-fg: #1a7f37;
+}
+
+html.dark {
   color-scheme: dark;
+  --bg: #0d1117;
+  --fg: #c9d1d9;
+  --fg-strong: #f0f6fc;
+  --muted: #8b949e;
+  --border: #30363d;
+  --code-bg: #0d1117;
+  --code-fg: #7ee787;
 }
 
 html,
@@ -10,11 +30,14 @@ body,
 
 body {
   margin: 0;
-  background: #0d1117;
-  color: #c9d1d9;
+  background: var(--bg);
+  color: var(--fg);
   font-family:
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC',
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
 /* 登录/注册这类页面：内容窄一点、居中 */
@@ -36,17 +59,17 @@ body {
   font-size: 22px;
   font-weight: 600;
   margin: 0 0 4px;
-  color: #f0f6fc;
+  color: var(--fg-strong);
 }
 
 .page-sub {
   margin: 0 0 20px;
-  color: #8b949e;
+  color: var(--muted);
   font-size: 14px;
 }
 
 .hint {
-  color: #8b949e;
+  color: var(--muted);
   font-size: 13px;
   line-height: 1.7;
 }
@@ -59,9 +82,9 @@ body {
   display: block;
   padding: 10px 12px;
   border-radius: 6px;
-  background: #0d1117;
-  border: 1px solid #30363d;
-  color: #7ee787;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  color: var(--code-fg);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 14px;
   word-break: break-all;
@@ -74,11 +97,19 @@ body {
 .fp {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
-  color: #8b949e;
+  color: var(--muted);
 }
 
 .actions {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+/* 右上角的主题切换：固定在角落，不占布局 */
+.theme-toggle {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
 }

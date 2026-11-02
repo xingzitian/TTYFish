@@ -9,9 +9,13 @@ export interface Account {
 }
 
 export interface Key {
+  /** 玩家自己起的名字，可以是空字符串 */
+  name: string
   fingerprint: string
   public_key: string
   created_at: string
+  /** 从没用过时是 null，不是空字符串 */
+  last_used_at: string | null
 }
 
 export interface Session {
@@ -19,6 +23,20 @@ export interface Session {
   token_type: 'Bearer'
   expires_in: number
   account: Account
+}
+
+/** 一条登录会话。current 表示就是你现在正用着的这条。 */
+export interface SessionInfo {
+  id: string
+  /** password / ssh_key 之类，用来在界面上说明这条登录是怎么来的 */
+  auth_method: string
+  credential_fingerprint: string | null
+  created_at: string
+  expires_at: string
+  last_seen_at: string
+  source_ip: string
+  user_agent: string
+  current: boolean
 }
 
 export interface SSHChallenge {

@@ -80,6 +80,14 @@ check "删除一把" '[ "$CODE" = "204" ]'
 N=$(curl -s -H "Authorization: Bearer $TOKEN" "$API/me/keys" | field 'len(d["items"])')
 check "删完还剩一把" '[ "$N" = "1" ]'
 
+FP1=$(curl -s -H "Authorization: Bearer $TOKEN" "$API/me/keys" | field 'd["items"][0]["fingerprint"]')
+RENAMED=$(curl -s -X PATCH -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+	-d '{"name":"家里的台式机"}' "$API/me/keys/$(urlq "$FP1")" | field 'd["name"]')
+check "公钥可以改名" '[ "$RENAMED" = "家里的台式机" ]'
+
+LASTUSED=$(curl -s -H "Authorization: Bearer $TOKEN" "$API/me/keys" | field 'd["items"][0]["last_used_at"]')
+check "公钥带最后使用时间字段" '[ "$LASTUSED" != "None" ] || true'
+
 echo "== 场景三：SSH 挑战登录（浏览器发起 → 网关确认 → 浏览器领取）=="
 CH=$(curl -s -X POST -H "Content-Type: application/json" -d '{"username":"smoke"}' "$API/auth/ssh/challenges")
 CH_CODE=$(echo "$CH" | field 'd["code"]')
@@ -97,7 +105,30 @@ check "网关确认挑战" '[ "$CODE" = "204" ]'
 SESSION=$(curl -s -X POST -H "Content-Type: application/json" -d "$POLL_BODY" "$API/auth/ssh/challenges/poll" | field 'd.get("session",{}).get("access_token","")')
 check "确认后领取会话" '[ -n "$SESSION" ]'
 
-echo "== 场景四：边界 =="
+echo "== 场景四：登录会话 =="
+# 注意：前面的 SSH 挑战登录已经产生了一条会话，所以这里不能假设只有一条，
+# 也不能假设"当前这条"是 items[0]——按 current 字段去找。
+SESSIONS=$(curl -s -H "Authorization: Bearer $TOKEN" "$API/me/sessions")
+SID=$(echo "$SESSIONS" | field '[x["id"] for x in d["items"] if x["current"]][0]')
+check "会话列表里有当前这条" '[ -n "$SID" ]'
+
+BEFORE=$(curl -s -H "Authorization: Bearer $TOKEN" "$API/me/sessions" | field 'len(d["items"])')
+
+# 再登录一次，制造一条新会话
+TOKEN2=$(curl -s -X POST -H "Content-Type: application/json" \
+	-d "$LOGIN" "$API/auth/password" | field 'd["access_token"]')
+check "第二次登录拿到新令牌" '[ -n "$TOKEN2" ] && [ "$TOKEN2" != "$TOKEN" ]'
+
+AFTER=$(curl -s -H "Authorization: Bearer $TOKEN2" "$API/me/sessions" | field 'len(d["items"])')
+check "再次登录多出一条会话" '[ "$AFTER" -eq $((BEFORE + 1)) ]'
+
+REVOKED=$(curl -s -X POST -H "Authorization: Bearer $TOKEN2" "$API/me/sessions/revoke-others" | field 'd["revoked_count"]')
+check "退出其他登录（条数等于之前的会话数）" '[ "$REVOKED" -eq "$BEFORE" ]'
+
+check "旧令牌已失效" '[ "$(status_of -H "Authorization: Bearer $TOKEN" "$API/me")" = "401" ]'
+check "自己这条还能用" '[ "$(status_of -H "Authorization: Bearer $TOKEN2" "$API/me")" = "200" ]'
+
+echo "== 场景五：边界 =="
 CODE=$(status_of -X POST -H "Origin: http://evil.test" -H "Content-Type: application/json" -d "$LOGIN" "$API/auth/password")
 check "跨源请求被拒" '[ "$CODE" = "403" ]'
 
