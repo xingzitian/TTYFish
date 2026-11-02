@@ -70,10 +70,16 @@ CREATE INDEX IF NOT EXISTS identities_account ON identities(account_id);
 
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL DEFAULT '',
   account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL,
-  note       TEXT NOT NULL DEFAULT ''
+  note       TEXT NOT NULL DEFAULT '',
+  auth_method TEXT NOT NULL DEFAULT 'unknown',
+  credential_fp TEXT NOT NULL DEFAULT '',
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  source_ip TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sessions_account ON sessions(account_id);
 
@@ -109,6 +115,10 @@ func Open(path string) (*Store, error) {
 	if err := migrateKeyNames(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("升级公钥元数据: %w", err)
+	}
+	if err := migrateSessions(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("升级会话数据: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -285,16 +295,7 @@ func sanitizeHandle(s string) string {
 
 // NewSession 发一个网页会话，返回明文 token（库里只存哈希）。
 func (s *Store) NewSession(accountID, note string, ttl time.Duration) (string, error) {
-	token := randomToken()
-	now := time.Now()
-	_, err := s.db.Exec(
-		`INSERT INTO sessions(token_hash, account_id, created_at, expires_at, note) VALUES(?,?,?,?,?)`,
-		hash(token), accountID, now.UnixMilli(), now.Add(ttl).UnixMilli(), note,
-	)
-	if err != nil {
-		return "", err
-	}
-	return token, nil
+	return s.NewSessionWithInfo(accountID, note, "unknown", "", ttl, ClientInfo{})
 }
 
 // SessionAccount 用会话 token 换账号。
@@ -312,6 +313,17 @@ func (s *Store) SessionAccount(token string) (Account, bool, error) {
 	}
 	if time.Now().UnixMilli() > expires {
 		_, _ = s.db.Exec(`DELETE FROM sessions WHERE token_hash = ?`, hash(token))
+		return Account{}, false, nil
+	}
+	result, err := s.db.Exec(`UPDATE sessions SET last_seen_at=MAX(last_seen_at,?) WHERE token_hash=? AND expires_at>?`, time.Now().UnixMilli(), hash(token), time.Now().UnixMilli())
+	if err != nil {
+		return Account{}, false, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return Account{}, false, err
+	}
+	if n != 1 {
 		return Account{}, false, nil
 	}
 	return s.ByID(accountID)

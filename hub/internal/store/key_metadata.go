@@ -65,6 +65,10 @@ func (s *Store) RenameIdentity(id, fp, name string) (bool, error) {
 
 // KeySession rechecks ownership and records successful key authentication atomically with the session.
 func (s *Store) KeySession(id, fp string, ttl time.Duration) (string, bool, error) {
+	return s.KeySessionWithInfo(id, fp, ttl, ClientInfo{})
+}
+
+func (s *Store) KeySessionWithInfo(id, fp string, ttl time.Duration, info ClientInfo) (string, bool, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", false, err
@@ -79,8 +83,8 @@ func (s *Store) KeySession(id, fp string, ttl time.Duration) (string, bool, erro
 	if err != nil || n != 1 {
 		return "", false, err
 	}
-	token := randomToken()
-	if _, err = tx.Exec(`INSERT INTO sessions(token_hash,account_id,created_at,expires_at,note) VALUES(?,?,?,?,?)`, hash(token), id, now.UnixMilli(), now.Add(ttl).UnixMilli(), "api-key"); err != nil {
+	token, err := insertSession(tx, id, "api-key", "ssh_key", fp, ttl, info)
+	if err != nil {
 		return "", false, err
 	}
 	if err = tx.Commit(); err != nil {

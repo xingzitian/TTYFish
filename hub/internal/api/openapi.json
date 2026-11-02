@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "TTYFish 账号认证 API",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "description": "阶段一账号 API。核心后端独立运行，Web/SSH 通过 HTTP 调用。仅使用 Authorization Bearer，不接受 Cookie。所有响应禁止缓存。注册和密码认证按直连来源 IP 共用每分钟 10 次预算。"
   },
   "servers": [
@@ -1992,7 +1992,7 @@
     "/api/v1/me/password": {
       "put": {
         "operationId": "setPassword",
-        "summary": "设置或替换密码，不撤销其他已发放会话",
+        "summary": "设置或修改密码，可选退出其他会话",
         "responses": {
           "204": {
             "description": "成功，无响应体"
@@ -2087,7 +2087,8 @@
               }
             }
           }
-        }
+        },
+        "description": "省略 revoke_other_sessions 时保持现有会话；true 时原子更新密码并撤销其他会话，保留当前会话。"
       }
     },
     "/api/v1/me/keys": {
@@ -2414,7 +2415,8 @@
               "type": "string"
             }
           }
-        ]
+        ],
+        "description": "删除公钥时原子撤销由该公钥登录的会话，并删除由它确认但尚未领取的挑战。若当前会话关联此公钥，成功返回 204 后当前令牌也失效。无法追溯公钥来源的历史会话需显式撤销。"
       },
       "get": {
         "operationId": "getKey",
@@ -2555,6 +2557,200 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/RenameKey"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "summary": "列出当前账号未过期且未撤销的会话",
+        "description": "按创建时间降序、ID 降序返回，包含当前会话，不包含原始令牌或令牌哈希。已完成的撤销不影响此前已通过认证的在途请求。",
+        "responses": {
+          "200": {
+            "description": "活跃登录会话",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SessionInfo"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/sessions/{id}": {
+      "delete": {
+        "operationId": "revokeSession",
+        "summary": "撤销自己的指定会话，也允许撤销当前会话",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "description": "成功返回 204；撤销当前会话后下一次请求返回 401。别人的、不存在的、已过期或已撤销的 ID 返回 404。SSE 在下一次状态事件或最长约 5 秒后的心跳中关闭。",
+        "responses": {
+          "204": {
+            "description": "撤销成功"
+          },
+          "400": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/sessions/revoke-others": {
+      "post": {
+        "operationId": "revokeOtherSessions",
+        "summary": "撤销当前账号其他活跃会话，保留当前会话",
+        "description": "无需请求体。重复调用返回 revoked_count=0。仅统计实际删除的其他未过期会话，不影响其他账号。",
+        "responses": {
+          "200": {
+            "description": "撤销数量",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "revoked_count": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "revoked_count"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "标准 JSON 错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
               }
             }
           }
@@ -3568,6 +3764,11 @@
           "password": {
             "type": "string",
             "description": "10–72 个 UTF-8 字节，不允许全空白"
+          },
+          "revoke_other_sessions": {
+            "type": "boolean",
+            "default": false,
+            "description": "true 时改密码和撤销其他所有登录方式的会话在同一事务内完成；保留当前会话"
           }
         },
         "required": [
@@ -3664,6 +3865,68 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "SessionInfo": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{24}$",
+            "description": "随机独立的会话管理 ID，不是令牌或令牌哈希"
+          },
+          "auth_method": {
+            "type": "string",
+            "enum": [
+              "password",
+              "ssh_key",
+              "ssh_challenge",
+              "unknown"
+            ]
+          },
+          "credential_fingerprint": {
+            "type": "string",
+            "nullable": true,
+            "description": "密钥认证使用的公钥指纹；密码或无法追溯的历史会话为 null"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "最近一次后端成功验证会话的时间，包含 SSE 心跳；历史数据初始为创建时间"
+          },
+          "source_ip": {
+            "type": "string",
+            "description": "创建会话时后端直连来源 IP，不信任 X-Forwarded-For；经过网关或代理时为转发节点 IP，未知为空字符串"
+          },
+          "user_agent": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "创建会话时的客户端声明，仅作展示，不能用来验证设备身份"
+          },
+          "current": {
+            "type": "boolean",
+            "description": "是否为当前请求使用的 Bearer 会话"
+          }
+        },
+        "required": [
+          "id",
+          "auth_method",
+          "credential_fingerprint",
+          "created_at",
+          "expires_at",
+          "last_seen_at",
+          "source_ip",
+          "user_agent",
+          "current"
         ]
       }
     }

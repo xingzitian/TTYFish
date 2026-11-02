@@ -32,6 +32,12 @@ type Repository interface {
 	LinkNamed(string, string, string, *string) error
 	RenameIdentity(string, string, string) (bool, error)
 	KeySession(string, string, time.Duration) (string, bool, error)
+	KeySessionWithInfo(string, string, time.Duration, store.ClientInfo) (string, bool, error)
+	NewSessionWithInfo(string, string, string, string, time.Duration, store.ClientInfo) (string, error)
+	Sessions(string, string) ([]store.SessionInfo, error)
+	RevokeSession(string, string, string) (bool, error)
+	RevokeOtherSessions(string, string) (int64, error)
+	SetPasswordAndRevokeOthers(string, string, string) error
 	ByHandle(string) (store.Account, bool, error)
 	ByFingerprint(string) (store.Account, bool, error)
 	AuthenticatePassword(string, string) (store.Account, bool)
@@ -46,7 +52,7 @@ type Repository interface {
 	AllowPollAttempt(string) bool
 	NewAPIChallenge(string, time.Duration) (store.Challenge, error)
 	ConfirmAPIChallenge(string, string, string) error
-	RedeemAPIChallenge(string, time.Duration) (string, store.Account, string, error)
+	RedeemAPIChallenge(string, time.Duration, ...store.ClientInfo) (string, store.Account, string, error)
 }
 
 type Service struct{ repo Repository }
@@ -138,26 +144,26 @@ func classifyConflict(err error) error {
 	return err
 }
 
-func (s *Service) issue(a store.Account) (Session, error) {
-	token, err := s.repo.NewSession(a.ID, "api", SessionTTL)
+func (s *Service) issue(a store.Account, info ClientInfo) (Session, error) {
+	token, err := s.repo.NewSessionWithInfo(a.ID, "api", "password", "", SessionTTL, info)
 	return Session{token, "Bearer", int64(SessionTTL.Seconds()), view(a)}, err
 }
 
-func (s *Service) LoginPassword(username, password string) (Session, error) {
+func (s *Service) LoginPassword(username, password string, clients ...ClientInfo) (Session, error) {
 	a, ok := s.repo.AuthenticatePassword(username, password)
 	if !ok {
 		return Session{}, ErrCredentials
 	}
-	return s.issue(a)
+	return s.issue(a, firstClient(clients))
 }
 
 // LoginVerifiedKey may only be called by a trusted gateway after SSH proof of possession.
-func (s *Service) LoginVerifiedKey(username, publicKey string) (Session, error) {
+func (s *Service) LoginVerifiedKey(username, publicKey string, clients ...ClientInfo) (Session, error) {
 	a, fp, err := s.keyAccount(username, publicKey)
 	if err != nil {
 		return Session{}, err
 	}
-	token, ok, err := s.repo.KeySession(a.ID, fp, SessionTTL)
+	token, ok, err := s.repo.KeySessionWithInfo(a.ID, fp, SessionTTL, firstClient(clients))
 	if err != nil {
 		return Session{}, err
 	}

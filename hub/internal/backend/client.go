@@ -145,6 +145,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, gateway 
 	if err != nil {
 		return 0, nil, err
 	}
+	req.Header.Set("User-Agent", "TTYFish-SSH-Gateway")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

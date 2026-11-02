@@ -48,6 +48,9 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 | POST | `/api/v1/auth/password` | 无 | 用户名和密码登录 |
 | GET | `/api/v1/me` | 玩家 Bearer | 当前账号 |
 | POST | `/api/v1/auth/logout` | 玩家 Bearer | 撤销当前会话 |
+| GET | `/api/v1/me/sessions` | 玩家 Bearer | 查询自己的活跃登录会话 |
+| DELETE | `/api/v1/me/sessions/{id}` | 玩家 Bearer | 撤销指定会话，可撤销当前会话 |
+| POST | `/api/v1/me/sessions/revoke-others` | 玩家 Bearer | 退出其他会话，保留当前会话 |
 | PUT | `/api/v1/me/password` | 玩家 Bearer | 设置或替换密码 |
 | GET | `/api/v1/me/keys` | 玩家 Bearer | 列出自己的公钥 |
 | POST | `/api/v1/me/keys` | 玩家 Bearer | 添加公钥 |
@@ -137,7 +140,69 @@ Invoke-RestMethod "$apiBase/api/v1/auth/logout" -Method Post -Headers $headers
 }
 ```
 
-后续请求使用 `Authorization: Bearer <access_token>`。API 不读取登录 Cookie，不把令牌放进 URL。会话有效期为 24 小时，无刷新令牌；过期后重新登录。退出只撤销当前令牌。修改密码和删除公钥影响后续认证，不撤销此前发放的令牌。
+后续请求使用 `Authorization: Bearer <access_token>`。API 不读取登录 Cookie，不把令牌放进 URL。新会话有效期为 24 小时，无刷新令牌；过期后重新登录。退出只撤销当前令牌。修改密码默认保留会话，可通过 revoke_other_sessions 选择退出其他登录；删除公钥会同时撤销由该公钥登录的已关联会话。
+
+## 登录会话管理
+
+使用 `GET /api/v1/me/sessions` 查询当前账号所有未过期、未撤销的会话，按创建时间降序、同时间按 ID 降序返回：
+
+```json
+{
+  "items": [{
+    "id": "0123456789abcdef01234567",
+    "auth_method": "ssh_key",
+    "credential_fingerprint": "SHA256:...",
+    "created_at": "2026-11-02T10:00:00+08:00",
+    "expires_at": "2026-11-03T10:00:00+08:00",
+    "last_seen_at": "2026-11-02T10:05:00+08:00",
+    "source_ip": "127.0.0.1",
+    "user_agent": "TTYFish-SSH-Gateway",
+    "current": true
+  }]
+}
+```
+
+- `id` 是独立生成的 24 位十六进制管理 ID，不是登录令牌，也不包含令牌哈希。不能用此 ID 访问账号或游戏接口。
+- `auth_method` 为 `password`、`ssh_key`、`ssh_challenge` 或历史来源不明的 `unknown`。
+- `credential_fingerprint` 为实际认证使用的公钥指纹。密码会话和无法追溯的历史会话返回 null。
+- `last_seen_at` 是后端最近成功验证此会话的时间，包含普通请求和 SSE 心跳，不代表用户最后按键时间。
+- `source_ip` 和 `user_agent` 在会话创建时记录，后续请求不覆盖。来源 IP 是后端的直连地址；通过反向代理或 SSH 网关时通常显示转发节点地址，不信任 X-Forwarded-For。User-Agent 是客户端声明，不是可信的设备识别。未知值为空字符串。
+- `current` 只表示当前请求使用的令牌，同一浏览器多个标签页共用令牌时属于同一会话，不保证与一台物理设备一一对应。
+
+使用 `DELETE /api/v1/me/sessions/{id}` 撤销指定会话，成功返回 204。只允许撤销自己的会话，其他账号的 ID、不存在、已过期或已撤销的 ID 都返回 404；ID 格式不正确返回 400。允许撤销当前会话，成功响应后客户端应清除本地令牌，后续请求将返回 401。
+
+使用 `POST /api/v1/me/sessions/revoke-others` 退出其他登录，无需请求体，返回 `{"revoked_count":2}`。数量只统计实际撤销的其他活跃会话；重复调用返回 0，当前会话保留，其他账号不受影响。并发执行时，已被另一请求撤销的令牌不能继续撤销仍有效的会话。
+
+### 密码与公钥的关联策略
+
+设置密码时可以显式退出其他登录：
+
+```http
+PUT /api/v1/me/password
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{"password":"replacement-password-123","revoke_other_sessions":true}
+```
+
+省略该字段或传 false，维持原行为，其他会话仍有效。传 true 时，密码写入与撤销其他会话在同一个事务内完成，保留当前会话；写入失败不会提前踢掉其他登录。撤销范围包含其他密码、SSH 密钥和 SSH 挑战会话。
+
+删除公钥时，会在删除事务中撤销 credential_fingerprint 与该公钥匹配的会话，并清理由它确认但尚未领取的挑战。不会撤销其他公钥或密码会话。如果当前会话就是用被删除的公钥登录的，删除成功后它也立即失效。最后一种凭证的删除仍被拒绝，且不会撤销任何会话。
+
+普通请求在下一次认证时返回 401。已经建立的 SSE 在下一次状态事件或最长约 5 秒后的心跳中发送 auth_expired 并关闭；网关应按现有失效流程处理。已经通过认证、正在执行的请求可能完成，撤销不回滚已提交的游戏动作。
+
+### 数据升级与联调
+
+启动后端会自动升级旧 sessions 表，给历史会话生成稳定的独立 ID，保留令牌有效性和原过期时间。能根据旧记录确认的登录方式会保留；无法追溯的方式标记 unknown，公钥关联、来源和客户端信息不猜测补齐。历史 last_seen_at 初始采用创建时间，后续认证时更新。缺少公钥关联的历史会话不能自动按密钥撤销，可通过会话管理接口主动撤销。
+
+```powershell
+$sessions = Invoke-RestMethod "$apiBase/api/v1/me/sessions" -Headers $headers
+$sessions.items
+# 保留当前登录，退出其余登录
+Invoke-RestMethod "$apiBase/api/v1/me/sessions/revoke-others" -Method Post -Headers $headers
+```
+
+此阶段只提供后端 API，Web 仍需添加会话列表、退出指定登录，以及修改密码时的退出选项。限流策略和刷新令牌不在本次改动范围内。
 
 ## SSH 网关联调约定
 

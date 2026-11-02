@@ -45,7 +45,7 @@ func (s *Store) ConfirmAPIChallenge(code, username, fp string) error {
 
 // RedeemAPIChallenge consumes the challenge and inserts its session in one transaction.
 // The DELETE is the first statement, serializing claims even across database handles.
-func (s *Store) RedeemAPIChallenge(poll string, ttl time.Duration) (state string, a Account, token string, err error) {
+func (s *Store) RedeemAPIChallenge(poll string, ttl time.Duration, clients ...ClientInfo) (state string, a Account, token string, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return "", a, "", err
@@ -78,8 +78,11 @@ func (s *Store) RedeemAPIChallenge(poll string, ttl time.Duration) (state string
 		return "", Account{}, "", err
 	}
 	a.CreatedAt = time.UnixMilli(created)
-	token = randomToken()
-	_, err = tx.Exec(`INSERT INTO sessions(token_hash,account_id,created_at,expires_at,note) VALUES(?,?,?,?,?)`, hash(token), a.ID, now.UnixMilli(), now.Add(ttl).UnixMilli(), "api-ssh-challenge")
+	info := ClientInfo{}
+	if len(clients) > 0 {
+		info = clients[0]
+	}
+	token, err = insertSession(tx, a.ID, "api-ssh-challenge", "ssh_challenge", fp, ttl, info)
 	if err != nil {
 		return "", Account{}, "", err
 	}

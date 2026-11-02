@@ -180,8 +180,10 @@ func TestRoomSSEOverHTTPAndTakeover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.service.Logout(token); err != nil {
-		t.Fatal(err)
+	for _, item := range sessionsFor(t, f, otherSession.AccessToken) {
+		if !item.Current {
+			f.request("DELETE", "/api/v1/me/sessions/"+item.ID, otherSession.AccessToken, nil, 204)
+		}
 	}
 	f.request("POST", base+"/chat", otherSession.AccessToken, map[string]int{"preset": 0}, 200)
 	kind, _ = event(reader2)

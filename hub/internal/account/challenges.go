@@ -73,11 +73,11 @@ func (s *Service) ConfirmSSHChallenge(username, publicKey, code string) error {
 	return err
 }
 
-func (s *Service) PollSSHChallenge(token string) (ChallengeResult, error) {
+func (s *Service) PollSSHChallenge(token string, clients ...ClientInfo) (ChallengeResult, error) {
 	if !pollTokenPattern.MatchString(token) {
 		return ChallengeResult{}, fmt.Errorf("%w: 查询凭证格式错误", ErrInvalid)
 	}
-	state, a, accessToken, err := s.repo.RedeemAPIChallenge(token, SessionTTL)
+	state, a, accessToken, err := s.repo.RedeemAPIChallenge(token, SessionTTL, firstClient(clients))
 	if err != nil {
 		return ChallengeResult{}, err
 	}

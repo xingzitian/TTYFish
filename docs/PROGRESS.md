@@ -11,7 +11,7 @@
 
 ## Web（浏览器）
 
-账号 API 全部覆盖。10/10。
+基础账号流程已接入。下表状态表示 Web 页面接入情况；新增密钥元数据和会话管理的后端 API 已完成，页面仍待对接。
 
 | 状态 | 接口 | 用途 |
 |---|---|---|
@@ -25,8 +25,15 @@
 | ✅ | `POST /api/v1/me/keys` | 添加公钥 |
 | ✅ | `DELETE /api/v1/me/keys/{fingerprint}` | 删除公钥 |
 | ✅ | `POST /api/v1/auth/logout` | 退出 |
+| ⬜ | `GET /api/v1/me/keys/{fingerprint}` | 单个公钥详情与最后使用时间 |
+| ⬜ | `PATCH /api/v1/me/keys/{fingerprint}` | 修改密钥名称 |
+| ⬜ | `GET /api/v1/me/sessions` | 登录会话列表 |
+| ⬜ | `DELETE /api/v1/me/sessions/{id}` | 退出指定登录 |
+| ⬜ | `POST /api/v1/me/sessions/revoke-others` | 退出其他登录 |
 
 页面：`/login`、`/register`、`/account`。
+
+公钥列表接口已提供 name、last_used_at，前端尚未展示。密码修改接口已支持 revoke_other_sessions，前端尚未增加选项。删除公钥会自动撤销关联会话；会话撤销后现有 SSE 会失效。后端测试已覆盖跨账号隔离、并发撤销、旧数据库迁移和失败事务回滚。
 
 **有意没做**：房间类接口（游戏在终端里打，网页不做牌桌）。战绩做 M3 时再谈。
 

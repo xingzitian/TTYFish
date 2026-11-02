@@ -51,7 +51,7 @@ func (s *Server) pollSSHChallenge(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	result, err := s.accounts.PollSSHChallenge(body.PollToken)
+	result, err := s.accounts.PollSSHChallenge(body.PollToken, clientInfo(r))
 	if err != nil {
 		report(w, err)
 		return

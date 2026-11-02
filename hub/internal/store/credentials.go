@@ -42,5 +42,11 @@ func (s *Store) RemoveIdentity(id, fp string) (bool, error) {
 	if _, err = tx.Exec(`DELETE FROM identities WHERE account_id=? AND fingerprint=?`, id, fp); err != nil {
 		return false, err
 	}
+	if _, err = tx.Exec(`DELETE FROM sessions WHERE account_id=? AND credential_fp=?`, id, fp); err != nil {
+		return false, err
+	}
+	if _, err = tx.Exec(`DELETE FROM challenges WHERE account_id=? AND confirmed_fp=?`, id, fp); err != nil {
+		return false, err
+	}
 	return true, tx.Commit()
 }

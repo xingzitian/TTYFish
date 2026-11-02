@@ -51,6 +51,9 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/v1/internal/auth/ssh/challenges/confirm", s.confirmSSHChallenge)
 	s.mux.HandleFunc("GET /api/v1/me", s.me)
 	s.mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
+	s.mux.HandleFunc("GET /api/v1/me/sessions", s.sessions)
+	s.mux.HandleFunc("DELETE /api/v1/me/sessions/{id}", s.revokeSession)
+	s.mux.HandleFunc("POST /api/v1/me/sessions/revoke-others", s.revokeOtherSessions)
 	s.mux.HandleFunc("PUT /api/v1/me/password", s.setPassword)
 	s.mux.HandleFunc("GET /api/v1/me/keys", s.keys)
 	s.mux.HandleFunc("POST /api/v1/me/keys", s.addKey)
@@ -197,7 +200,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	session, err := s.accounts.LoginPassword(body.Username, body.Password)
+	session, err := s.accounts.LoginPassword(body.Username, body.Password, clientInfo(r))
 	if err != nil {
 		report(w, err)
 		return
@@ -240,7 +243,7 @@ func (s *Server) keyLogin(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"account": a})
 		return
 	}
-	session, err := s.accounts.LoginVerifiedKey(body.Username, body.PublicKey)
+	session, err := s.accounts.LoginVerifiedKey(body.Username, body.PublicKey, clientInfo(r))
 	if err != nil {
 		report(w, err)
 		return
@@ -271,12 +274,13 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Password string `json:"password"`
+		Password            string `json:"password"`
+		RevokeOtherSessions bool   `json:"revoke_other_sessions,omitempty"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if err := s.accounts.SetPassword(a.ID, body.Password); err != nil {
+	if err := s.accounts.SetPasswordWithPolicy(a.ID, bearer(r), body.Password, body.RevokeOtherSessions); err != nil {
 		report(w, err)
 		return
 	}
