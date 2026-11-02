@@ -101,8 +101,35 @@ func (m *Model) compactPage() ([]engine.Card, int) {
 	return hand[start:end], pages
 }
 
+// pendingChallenge 返回"正等着我做决定"的 +4 质疑（不是我就返回 nil）。
+func (m *Model) pendingChallenge() *engine.ChallengeState {
+	obs := m.obs()
+	if obs.Challenge == nil || obs.Challenge.By != m.snap.MySeat {
+		return nil
+	}
+	return obs.Challenge
+}
+
 // handleCompactKey 是极简模式的按键：数字直接出牌，左右翻页，Tab 看玩家。
 func (m *Model) handleCompactKey(key string) tea.Cmd {
+	// 有待回应的 +4 质疑时，只认这两个键：
+	//   y 认罚摸 4 张   n 质疑（他手里还有同色牌就算耍赖）
+	// 出 +4 的那家**不参与回应**——引擎直接查他手牌，这是抓耍赖，不是谈判。
+	if m.pendingChallenge() != nil {
+		switch key {
+		case "y", "enter", " ":
+			m.act(engine.ResolveChallenge{Seat: m.snap.MySeat, Challenge: false})
+			return nil
+		case "n", "c":
+			m.act(engine.ResolveChallenge{Seat: m.snap.MySeat, Challenge: true})
+			return nil
+		case "i":
+			m.toggleLayout()
+			return nil
+		}
+		return nil
+	}
+
 	switch key {
 	case "q":
 		return m.quit()
@@ -119,12 +146,13 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 	case "tab":
 		m.playersUntil = time.Now().Add(playerPanelTTL)
 		return tea.Tick(playerPanelTTL, func(time.Time) tea.Msg { return hidePlayersMsg{} })
-	case "left", "h":
+	case "-", "_", "left", "h":
+		// 主键是 -/=：不少输入法用这两个翻页，手指不用离开主键区
 		if m.page > 0 {
 			m.page--
 		}
 		return nil
-	case "right", "l":
+	case "=", "+", "right", "l":
 		if _, pages := m.compactPage(); m.page < pages-1 {
 			m.page++
 		}
@@ -495,6 +523,11 @@ func (m *Model) compactPlayers(obs engine.Observation) []string {
 // 聊天根本不在引擎里（引擎不管聊天），它由房间追加到 Timeline 并打上 Chat 标记。
 // 之前读错了流，所以别人说的话一条都看不见。
 func (m *Model) compactFeed() string {
+	// 操作报错优先占这一行：它比战报更急，又不该把整行 CMD 提示顶掉
+	if m.errMsg != "" && time.Since(m.errAt) < 2*time.Second {
+		return m.warn().Render("[MSG] " + shortName(m.errMsg, 60))
+	}
+
 	if n := len(m.snap.Timeline); n > 0 {
 		last := m.snap.Timeline[n-1]
 		text := strings.TrimSpace(last.Text)
@@ -523,15 +556,15 @@ func (m *Model) compactFeed() string {
 
 // compactCmd 是上下文行：有临时状态就只显示那个状态的操作。
 func (m *Model) compactCmd(obs engine.Observation) string {
+	// 质疑是限时决定，必须独占这一行
+	if obs.Challenge != nil && obs.Challenge.By == m.snap.MySeat {
+		return m.warn().Render("[CMD] 对方打出 +4： [Y]认罚摸4  [N]质疑（他还有同色牌就算耍赖）")
+	}
 	if m.choosing {
 		return m.warn().Render("[CMD] 选颜色 [1]红 [2]黄 [3]蓝 [4]绿  (Esc 取消)")
 	}
-	// 错误只短暂占位：超过 2 秒就回到正常命令行，否则玩家不知道还能按什么
-	if m.errMsg != "" && time.Since(m.errAt) < 2*time.Second {
-		return m.warn().Render("[CMD] " + m.errMsg)
-	}
 
-	items := []string{"[1-5]出牌", "[U]UNO", "[D]摸牌", "[C]抓包", "[T]聊天", "[Tab]玩家", "[←→]翻页", "[I]界面", "[Q]退"}
+	items := []string{"[1-5]出牌", "[U]UNO", "[D]摸牌", "[C]抓包", "[T]聊天", "[Tab]玩家", "[-=]翻页", "[I]界面", "[Q]退"}
 	if obs.DrawnID >= 0 {
 		items = append(items, "[P]过牌")
 	}
@@ -559,16 +592,23 @@ func shortName(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// lastPlayer 从公共战报里找上一手是谁打的。
+// lastPlayer 找"上一手是谁打的"。
+//
+// 不能直接取战报最后一条：被 +2 之后最后一条是"你 被加二，摸 2 张并被跳过"，
+// 那条的 Seat 是**挨罚的人**，不是出牌的人。只有带 Card 的条目才是出牌记录
+// （见 engine.logCard），所以从后往前找第一条有牌的。
 func (m *Model) lastPlayer(obs engine.Observation) string {
-	if len(obs.Log) == 0 {
-		return ""
+	for i := len(obs.Log) - 1; i >= 0; i-- {
+		e := obs.Log[i]
+		if e.Card == nil {
+			continue
+		}
+		if e.Seat < 0 || e.Seat >= len(obs.HandCounts) {
+			return ""
+		}
+		return m.name(e.Seat)
 	}
-	last := obs.Log[len(obs.Log)-1]
-	if last.Seat < 0 || last.Seat >= len(obs.HandCounts) {
-		return ""
-	}
-	return m.name(last.Seat)
+	return ""
 }
 
 // applyLayout 落定一个界面密度选择：记下来，之后不再问。

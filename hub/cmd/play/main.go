@@ -32,7 +32,7 @@ func main() {
 	layout := flag.String("ui", "rich", "界面密度：rich 丰富 / compact 极简")
 	stack := flag.Bool("stack", false, "允许 +2/+4 叠加")
 	strict := flag.Bool("strict-draw", false, "摸牌后立即结束回合")
-	unoPenalty := flag.Bool("uno", false, "开启漏喊 UNO 罚牌")
+	unoPenalty := flag.Bool("uno", true, "漏喊 UNO 会被抓并罚摸两张（线上默认开启）")
 	challenge := flag.Bool("challenge", true, "允许质疑 +4")
 	match := flag.Int("match", 0, "长局目标分；0 表示只打一局")
 	flag.Parse()

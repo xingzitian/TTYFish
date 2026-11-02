@@ -92,16 +92,16 @@ func TestCompactPaging(t *testing.T) {
 		t.Fatalf("第一页不该出现第 6 张：\n%s", out)
 	}
 
-	m.handleKey(keyOf("right"))
+	m.handleKey(keyOf("="))
 	if out := strip(m.View()); !strings.Contains(out, "2/3") {
 		t.Fatalf("按右方向键应该到 2/3：\n%s", out)
 	}
-	m.handleKey(keyOf("right"))
-	m.handleKey(keyOf("right")) // 越界不能再翻
+	m.handleKey(keyOf("="))
+	m.handleKey(keyOf("=")) // 越界不能再翻
 	if out := strip(m.View()); !strings.Contains(out, "3/3") {
 		t.Fatalf("最多停在 3/3：\n%s", out)
 	}
-	m.handleKey(keyOf("left"))
+	m.handleKey(keyOf("-"))
 	if out := strip(m.View()); !strings.Contains(out, "2/3") {
 		t.Fatalf("按左方向键应该回 2/3：\n%s", out)
 	}

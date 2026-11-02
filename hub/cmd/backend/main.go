@@ -41,7 +41,7 @@ func run() error {
 		return err
 	}
 	defer st.Close()
-	games, err := play.New([]play.Game{{ID: "uno", Rules: uno.New(engine.Rules{Challenge: true}), Codec: protocol.Codec{}}}, room.Options{})
+	games, err := play.New([]play.Game{{ID: "uno", Rules: uno.New(engine.Rules{Challenge: true, UnoPenalty: true}), Codec: protocol.Codec{}}}, room.Options{})
 	if err != nil {
 		return err
 	}

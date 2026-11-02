@@ -59,7 +59,7 @@ func main() {
 	cancelCheck()
 
 	// 规则由后端决定；这里这份只用于界面展示（谁在出牌、剩几张）。
-	displayRules := engine.Rules{Challenge: true}
+	displayRules := engine.Rules{Challenge: true, UnoPenalty: true}
 
 	// 网关能渲染哪些游戏，就在组装入口登记；后端那边开放哪些由 /api/v1/games 决定。
 	games := registry.New()

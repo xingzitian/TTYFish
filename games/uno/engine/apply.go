@@ -366,6 +366,14 @@ func (s *State) catchUno(v CatchUno) error {
 	if v.Target != s.UnoPending || v.Seat == s.UnoPending {
 		return ErrNoCatch
 	}
+	// 只能抓"手里还剩一张"的人。挂起状态是出牌那一刻设的，之后他可能又
+	// 摸到牌（轮到他自己时选择摸牌），这时抓他等于凭空罚人。
+	// 这种挂起已经过期，顺手清掉，免得一直挂着挡别的事。
+	if target := s.UnoPending; len(s.Hands[target]) != 1 {
+		s.UnoPending = -1
+		s.UnoCalled[target] = false
+		return ErrNoCatch
+	}
 	target := s.UnoPending
 	s.UnoPending = -1
 	got := s.drawTo(target, 2)

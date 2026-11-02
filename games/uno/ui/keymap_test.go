@@ -93,7 +93,7 @@ func TestAdvertisedKeysRespond(t *testing.T) {
 	for _, s := range []state{lobbyState(false), lobbyState(true)} {
 		for _, k := range []keyCase{{"s", "开始"}, {"b", "加电脑"}, {"t", "聊天"}, {"v", "投票"}, {"l", "离开"}, {"q", "退出"}, {"i", "界面"}} {
 			m, rec := s.model()
-			if s.minimal && k.key == "left" {
+			if s.minimal && k.key == "-" {
 				m.page = 1 // 第一页按左键本来就该没反应
 			}
 			before := fingerprint(m)
@@ -111,7 +111,7 @@ func TestAdvertisedKeysRespond(t *testing.T) {
 	}
 	compactKeys := append([]keyCase{}, richKeys...)
 	compactKeys = append(compactKeys,
-		keyCase{"left", "翻页"}, keyCase{"right", "翻页"}, keyCase{"tab", "玩家"})
+		keyCase{"-", "翻页"}, keyCase{"=", "翻页"}, keyCase{"tab", "玩家"})
 	for i := range compactKeys {
 		if compactKeys[i].key == "enter" {
 			compactKeys[i].key = "3" // 极简里没有回车出牌，换成一张牌
@@ -125,7 +125,7 @@ func TestAdvertisedKeysRespond(t *testing.T) {
 		}
 		for _, k := range keys {
 			m, rec := s.model()
-			if s.minimal && k.key == "left" {
+			if s.minimal && k.key == "-" {
 				m.page = 1 // 第一页按左键本来就该没反应
 			}
 			before := fingerprint(m)
