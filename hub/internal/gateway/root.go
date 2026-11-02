@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,6 +42,13 @@ type Deps struct {
 
 // Root 是这条连接的根模型。
 type Root struct {
+	// mu 保护下面的界面状态。
+	//
+	// bubbletea 的 Update/View 跑在事件循环的 goroutine 里，而会话结束时
+	// sshd 会从另一个 goroutine 调 Close()。不同步就是数据竞争——
+	// CI 的 -race 抓到过一次，生产上表现为偶发的 panic 或状态错乱。
+	mu sync.Mutex
+
 	deps Deps
 
 	lob   *lobby.Model
@@ -58,6 +66,9 @@ func New(deps Deps) *Root {
 }
 
 func (r *Root) Init() tea.Cmd {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.deps.ResumeMode {
 		if resumed := r.resume(); resumed {
 			return r.game.Init()
@@ -101,6 +112,9 @@ func (r *Root) startLobby() {
 }
 
 func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
 		r.width, r.height = v.Width, v.Height
@@ -160,6 +174,9 @@ func (r *Root) enter(gameID string) error {
 }
 
 func (r *Root) View() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.quit {
 		return ""
 	}
@@ -174,15 +191,21 @@ func (r *Root) View() string {
 
 // Close 释放订阅；不离开房间（座位要留给重连）。
 func (r *Root) Close() {
+	r.mu.Lock()
 	if r.closed {
+		r.mu.Unlock()
 		return
 	}
 	r.closed = true
-	if r.game != nil {
-		r.game.Close()
+	game, conn := r.game, r.conn
+	r.mu.Unlock()
+
+	// 锁外调用：这两个 Close 会进到客户端/房间那边，不能占着界面的锁去等它们。
+	if game != nil {
+		game.Close()
 	}
-	if r.conn != nil {
-		r.conn.Close()
+	if conn != nil {
+		conn.Close()
 	}
 }
 
@@ -190,7 +213,10 @@ func (r *Root) Close() {
 func (r *Root) WaitReady(d time.Duration) bool {
 	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
-		if r.game != nil || r.lob != nil {
+		r.mu.Lock()
+		ready := r.game != nil || r.lob != nil
+		r.mu.Unlock()
+		if ready {
 			return true
 		}
 		time.Sleep(10 * time.Millisecond)
