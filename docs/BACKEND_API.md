@@ -34,6 +34,7 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 
 - API 地址：`http://127.0.0.1:8081`。
 - 健康检查：`GET /healthz`，检查进程可响应。
+- 服务器版本：`GET /api/v1/version`，无需认证，返回当前服务器发布版本。
 - OpenAPI：`GET /api/openapi.json`，可导入支持 OpenAPI 3.0 的 API 工具。
 - [OpenAPI 源文件](../hub/internal/api/openapi.json)。
 - 默认数据库为 `backend.db`。如需使用现有账号，先备份，再显式指定 `-db hub.db`。数据表向后兼容，不会自动改用户名。
@@ -44,6 +45,7 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 
 | 方法 | 路径 | 认证 | 用途 |
 |---|---|---|---|
+| GET | `/api/v1/version` | 无 | 查询当前服务器版本 |
 | POST | `/api/v1/accounts` | 无 | 注册，返回账号，不自动创建登录会话 |
 | POST | `/api/v1/auth/password` | 无 | 用户名和密码登录 |
 | GET | `/api/v1/me` | 玩家 Bearer | 当前账号 |
@@ -61,6 +63,22 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 | POST | `/api/v1/auth/ssh/challenges` | 无 | 为固定用户名生成网页登录挑战 |
 | POST | `/api/v1/internal/auth/ssh/challenges/confirm` | 网关 Bearer | 验证 SSH 私钥后确认挑战 |
 | POST | `/api/v1/auth/ssh/challenges/poll` | 浏览器 poll_token | 查询状态并一次性领取会话 |
+
+### 服务器版本
+
+`GET /api/v1/version` 不需要请求体或登录凭证，成功返回 `200 OK`：
+
+```json
+{"version":"v0.1.8"}
+```
+
+响应为 `application/json; charset=utf-8`，沿用 API 的 `Cache-Control: no-store` 和 CORS 策略。`version` 保留 `v` 前缀，表示当前服务器发布版本，不是 OpenAPI 的 `info.version`、前端包版本或游戏协议版本。版本值统一定义在 `hub/internal/api/server.go` 的 `serverVersion` 常量中，发布新版本时更新该值及相关测试、文档示例。
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8081/api/v1/version'
+```
+
+### 账号约定
 
 账号 ID 是稳定身份，用户名固定且区分大小写：新用户名只接受小写字母，3–20 位，允许数字、下划线和短横线，以字母开头。SSH 网关必须使用后端返回的账号 ID 标识玩家，不能使用客户端自报用户名或公钥指纹作为游戏账号 ID。
 

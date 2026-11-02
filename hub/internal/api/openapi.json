@@ -16,6 +16,36 @@
     }
   ],
   "paths": {
+    "/api/v1/version": {
+      "get": {
+        "operationId": "getServerVersion",
+        "summary": "查询当前服务器版本",
+        "description": "无需认证。返回服务器发布版本，保留 v 前缀；与 OpenAPI 文档版本及游戏协议版本无关。",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "当前服务器版本",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "version": {
+                      "type": "string",
+                      "example": "v0.1.8"
+                    }
+                  },
+                  "required": [
+                    "version"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/games": {
       "get": {
         "operationId": "listGames",
