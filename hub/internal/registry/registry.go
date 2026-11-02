@@ -31,6 +31,14 @@ type UIContext struct {
 	SetLayout func(string, ui.Layout)
 }
 
+// Modal 由"有弹窗界面"的游戏实现。
+//
+// 网关要靠它决定 Esc/q 归谁处理：弹窗打开时 Esc 是"关弹窗"，
+// 不能当成"离开房间"。
+type Modal interface {
+	HasModal() bool
+}
+
 // Entry 将游戏标识、规则实现和界面工厂绑定在一起，由组装入口创建。
 type Entry struct {
 	ID    string

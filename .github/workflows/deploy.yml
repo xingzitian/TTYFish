@@ -49,10 +49,12 @@ jobs:
           CGO_ENABLED: '0'
           GOOS: linux
           GOARCH: amd64
+          # 界面标题栏要显示版本号，直接写在二进制里
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           mkdir -p ../dist
-          go build -trimpath -ldflags "-s -w" -o ../dist/hub-linux-amd64 ./cmd/hub
-          go build -trimpath -ldflags "-s -w" -o ../dist/backend-linux-amd64 ./cmd/backend
+          go build -trimpath -ldflags "-s -w -X main.version=$TAG" -o ../dist/hub-linux-amd64 ./cmd/hub
+          go build -trimpath -ldflags "-s -w -X github.com/xingzitian/TTYFish/hub/internal/api.serverVersion=$TAG" -o ../dist/backend-linux-amd64 ./cmd/backend
           file ../dist/hub-linux-amd64 ../dist/backend-linux-amd64
           cd ../dist
           sha256sum hub-linux-amd64 > hub-linux-amd64.sha256

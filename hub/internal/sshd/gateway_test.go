@@ -313,9 +313,14 @@ func TestGatewayAuthentication(t *testing.T) {
 			defer session.Close()
 
 			if tc.wantMount {
-				// 大厅里只有一个游戏，回车即进入
-				time.Sleep(100 * time.Millisecond)
-				_, _ = stdin.Write([]byte("\r"))
+				// 现在是三级菜单：Home → Gamelist → 游戏 → 创建房间。
+				// 每按一次回车要等界面重画，太快会落在同一个屏幕的同一个位置。
+				for i := 0; i < 3; i++ {
+					time.Sleep(150 * time.Millisecond)
+					if _, err := stdin.Write([]byte("\r")); err != nil {
+						t.Fatalf("发送回车失败：%v", err)
+					}
+				}
 			}
 
 			select {

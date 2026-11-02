@@ -116,7 +116,9 @@ func NewModel(id Identity, c client.Client, opts Options, r *lipgloss.Renderer) 
 
 	in := textinput.New()
 	in.Prompt = ""
-	in.Placeholder = "ABC234"
+	// 不要放一个看起来像真房间码的占位符——真有人照着敲，
+	// 然后收到"房间不存在"，还以为是服务端坏了。
+	in.Placeholder = ""
 	in.CharLimit = 6
 	in.Width = 8
 	in.Focus()
@@ -505,6 +507,13 @@ func (m *Model) leave() {
 }
 
 // Close 取消订阅并通知房间"我断线了"。可以重复调用。
+// HasModal 告诉网关：现在有没有弹窗占着键盘。
+//
+// 有的话 Esc 应该先关弹窗（选色、聊天、质疑），而不是被当成"离开房间"。
+func (m *Model) HasModal() bool {
+	return m.choosing || m.chat || m.entering || m.boss
+}
+
 func (m *Model) Close() {
 	if m.c != nil {
 		_ = m.c.Leave()

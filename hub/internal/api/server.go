@@ -15,7 +15,10 @@ import (
 	"github.com/xingzitian/TTYFish/hub/internal/ratelimit"
 )
 
-const serverVersion = "v0.1.8"
+// serverVersion 由构建时注入：-ldflags "-X .../internal/api.serverVersion=v0.1.9"。
+// 不写死的原因：网关的标题栏也是注入的，两边必须是同一个 tag，
+// 否则界面上写着 v0.1.9beta1、接口回你 v0.1.8，查问题时会先怀疑人生。
+var serverVersion = "dev"
 
 type Config struct {
 	TrustedProxies []string

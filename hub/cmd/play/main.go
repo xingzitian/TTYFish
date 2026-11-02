@@ -18,6 +18,7 @@ import (
 	"github.com/xingzitian/TTYFish/games/uno"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
 	unoUI "github.com/xingzitian/TTYFish/games/uno/ui"
+	"github.com/xingzitian/TTYFish/hub/internal/console"
 	"github.com/xingzitian/TTYFish/hub/internal/room"
 	"github.com/xingzitian/TTYFish/hub/internal/session"
 	"github.com/xingzitian/TTYFish/sdk/ui"
@@ -25,7 +26,7 @@ import (
 
 func main() {
 	// 先修终端：Windows 默认 GBK + 不开 VT，不处理会乱码、颜色全变成转义符
-	setupConsole()
+	console.Setup()
 
 	bots := flag.Int("bots", 3, "电脑玩家数量（1~5）")
 	color := flag.String("color", "block", "颜色深浅：block 满色 / text 文字上色 / plain 无色")
@@ -53,6 +54,12 @@ func main() {
 	}
 	if n > 5 {
 		n = 5
+	}
+
+	// Windows Terminal 不设 TERM，空值会被 ProfileFor 判成 Ascii（一片黑白）。
+	term := os.Getenv("TERM")
+	if term == "" {
+		term = "xterm-256color"
 	}
 
 	rules := engine.Rules{
@@ -88,7 +95,8 @@ func main() {
 			Mode:   mode,
 			Layout: layoutMode,
 		},
-		nil,
+		// 必须显式给渲染器：nil 会落到 lipgloss 默认探测，非 TTY 上永远是 Ascii
+		unoUI.NewRenderer(os.Stdout, term),
 	)
 
 	if _, err := tea.NewProgram(model, tea.WithAltScreen()).Run(); err != nil {

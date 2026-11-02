@@ -188,6 +188,9 @@ func (c *Client) GameID() string {
 	return c.gameID
 }
 
+// Code 是当前所在房间的房间码；不在房间里时为空。
+func (c *Client) Code() string { return c.currentCode() }
+
 // Revision 是本地看到的最新房间版本。
 func (c *Client) Revision() uint64 {
 	c.mu.Lock()

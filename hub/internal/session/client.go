@@ -20,6 +20,7 @@ type Client struct {
 	mu     sync.Mutex
 	rm     *room.Room
 	sub    <-chan client.Snapshot
+	code   string
 	cancel func()
 	snap   client.Snapshot
 }
@@ -65,6 +66,14 @@ func (c *Client) Join(code string) error {
 	if !c.attach(rm) {
 		return fmt.Errorf("进房间失败")
 	}
+	c.mu.Lock()
+	c.code = c.snap.Code
+	c.mu.Unlock()
+	if code != "" {
+		c.mu.Lock()
+		c.code = code
+		c.mu.Unlock()
+	}
 	return nil
 }
 
@@ -73,6 +82,7 @@ func (c *Client) Leave() error {
 	rm, cancel := c.rm, c.cancel
 	c.rm, c.cancel, c.sub = nil, nil, nil
 	c.snap = client.Snapshot{}
+	c.code = ""
 	c.mu.Unlock()
 
 	if cancel != nil {
@@ -82,6 +92,13 @@ func (c *Client) Leave() error {
 		rm.Disconnect(c.fp)
 	}
 	return nil
+}
+
+// Code 是当前所在房间的房间码；不在房间里时为空。
+func (c *Client) Code() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.code
 }
 
 func (c *Client) Snapshot() client.Snapshot {

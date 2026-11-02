@@ -89,7 +89,8 @@ func TestServerVersion(t *testing.T) {
 	f := fixture{t: t, handler: srv.Handler()}
 	w := f.request("GET", "/api/v1/version", "", nil, http.StatusOK)
 	got := read[map[string]string](t, w)
-	if len(got) != 1 || got["version"] != "v0.1.8" {
+	// 版本号是构建时注入的，测试断言它和当前值一致，而不是钉死某个 tag
+	if len(got) != 1 || got["version"] != serverVersion {
 		t.Fatalf("unexpected server version response: %s", w.Body.String())
 	}
 	if got := w.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {

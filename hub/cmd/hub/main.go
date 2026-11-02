@@ -28,10 +28,15 @@ import (
 	"github.com/xingzitian/TTYFish/sdk/ui"
 )
 
+// version 由构建时注入：-ldflags "-X main.version=v0.1.9"。
+// 没注入时显示 dev，免得本地跑出来一个假的版本号。
+var version = "dev"
+
 func main() {
 	addr := flag.String("addr", ":2222", "SSH 监听地址")
 	hostKey := flag.String("host-key", "host_ed25519", "host key 文件（不存在会自动生成）")
 	backendURL := flag.String("backend", "http://127.0.0.1:8081", "后端房间 API 地址")
+	webURL := flag.String("web-url", "", "网页地址，界面上“进入 Web 设置”会显示它；留空表示未配置")
 	gatewayToken := flag.String("gateway-token", os.Getenv("TTYFISH_GATEWAY_TOKEN"), "网关凭证（默认读环境变量 TTYFISH_GATEWAY_TOKEN）")
 	color := flag.String("color", "block", "默认颜色深浅：block 满色 / text 文字上色 / plain 无色")
 	idle := flag.Duration("idle-timeout", 30*time.Minute, "空闲连接超时")
@@ -82,6 +87,8 @@ func main() {
 		BackendURL:  *backendURL,
 		Accounts:    accounts,
 		PrefsPath:   filepath.Join(filepath.Dir(*hostKey), "prefs.json"),
+		Version:     version,
+		WebURL:      *webURL,
 		IdleTimeout: *idle,
 		Mode:        mode,
 		Games:       games,

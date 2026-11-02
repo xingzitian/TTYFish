@@ -46,6 +46,10 @@ type Config struct {
 	PrefsPath string
 	// BackendURL 是房间 API 的地址，例如 http://127.0.0.1:8081。
 	BackendURL string
+	// Version 显示在界面标题栏；空值显示 dev。
+	Version string
+	// WebURL 是"进入 Web 设置"要展示的地址；空值表示未配置。
+	WebURL string
 	// Accounts 是账号 API 的客户端；网关自己不查库。
 	Accounts    *backend.Client
 	BotDelay    time.Duration
@@ -249,6 +253,7 @@ func New(cfg Config) (*ssh.Server, error) {
 					Mode: cfg.Mode, ModeOf: pref.mode, SetMode: pref.setMode,
 					Layout: sdkui.LayoutRich, LayoutOf: pref.layout, SetLayout: pref.setLayout,
 					Renderer: cfg.NewRenderer(s, term), ResumeMode: true,
+					Version: cfg.Version, WebURL: cfg.WebURL,
 				})
 
 				p := tea.NewProgram(root, append(bm.MakeOptions(s), tea.WithAltScreen())...)
