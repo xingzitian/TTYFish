@@ -15,6 +15,8 @@ import (
 	"github.com/xingzitian/TTYFish/hub/internal/ratelimit"
 )
 
+const serverVersion = "v0.1.8"
+
 type Config struct {
 	TrustedProxies []string
 	RateLimits     RateLimits
@@ -55,6 +57,9 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 		_, _ = w.Write(openAPISpec)
 	})
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { respond(w, 200, map[string]string{"status": "ok"}) })
+	s.mux.HandleFunc("GET /api/v1/version", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, http.StatusOK, map[string]string{"version": serverVersion})
+	})
 	s.mux.HandleFunc("POST /api/v1/accounts", s.register)
 	s.mux.HandleFunc("POST /api/v1/auth/password", s.password)
 	s.mux.HandleFunc("POST /api/v1/internal/auth/ssh", s.keyLogin)

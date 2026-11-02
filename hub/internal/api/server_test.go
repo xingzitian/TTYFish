@@ -81,6 +81,30 @@ func key(t *testing.T) string {
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k)))
 }
 
+func TestServerVersion(t *testing.T) {
+	srv, err := New(nil, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := fixture{t: t, handler: srv.Handler()}
+	w := f.request("GET", "/api/v1/version", "", nil, http.StatusOK)
+	got := read[map[string]string](t, w)
+	if len(got) != 1 || got["version"] != "v0.1.8" {
+		t.Fatalf("unexpected server version response: %s", w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("unexpected content type: %s", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("unexpected cache policy: %s", got)
+	}
+	w = f.request("POST", "/api/v1/version", "", nil, http.StatusMethodNotAllowed)
+	failure := read[map[string]map[string]string](t, w)
+	if failure["error"]["code"] != "method_not_allowed" {
+		t.Fatalf("unexpected method error: %s", w.Body.String())
+	}
+}
+
 func TestAccountLifecycle(t *testing.T) {
 	f := setup(t, Config{})
 	registration := map[string]string{"username": "alice", "password": "alice-password-123"}
@@ -219,7 +243,18 @@ func TestOpenAPIContractIsServed(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 27 {
+	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 28 {
 		t.Fatalf("unexpected contract: %s, %d paths", spec.OpenAPI, len(spec.Paths))
+	}
+	var version struct {
+		Get *struct {
+			Security []json.RawMessage `json:"security"`
+		} `json:"get"`
+	}
+	if err := json.Unmarshal(spec.Paths["/api/v1/version"], &version); err != nil {
+		t.Fatal(err)
+	}
+	if version.Get == nil || version.Get.Security == nil || len(version.Get.Security) != 0 {
+		t.Fatal("server version must be documented as a public GET endpoint")
 	}
 }
