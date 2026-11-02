@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "TTYFish 账号认证 API",
-    "version": "1.4.0",
-    "description": "阶段一账号 API。核心后端独立运行，Web/SSH 通过 HTTP 调用。仅使用 Authorization Bearer，不接受 Cookie。所有响应禁止缓存。注册和密码认证按直连来源 IP 共用每分钟 10 次预算。"
+    "version": "1.5.0",
+    "description": "核心后端的账号、房间和游戏 API。使用玩家 Bearer 会话和独立网关凭证。认证按来源、账号、认证网关及操作类型分层限流；默认窗口 60 秒。429 响应通过 Retry-After 返回实际剩余等待秒数。可信代理默认关闭。"
   },
   "servers": [
     {
@@ -1192,11 +1192,21 @@
             }
           },
           "429": {
-            "description": "请求过于频繁；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -1211,14 +1221,15 @@
               }
             }
           }
-        }
+        },
+        "description": " 只有配置在 trusted-proxies CIDR 中的直连代理提供的 X-Forwarded-For 才参与来源解析，从右向左找到第一个非可信地址；默认忽略所有转发头。"
       }
     },
     "/api/v1/auth/ssh/challenges/poll": {
       "post": {
         "operationId": "pollSSHChallenge",
         "summary": "浏览器凭 poll_token 查询并一次性领取会话",
-        "description": "每隔至少 1500ms 查询。pending 表示等待；ok 附带 session 且仅返回一次；expired 包括不存在、过期、已领取或公钥已撤销。每来源 IP 每分钟独立限制 120 次。查询凭证只能放 JSON 请求体，不能放 URL。",
+        "description": "浏览器至少每 1500ms 查询一次。pending 等待；ok 附带一次性 session；expired 包含不存在、过期、已领取和公钥撤销。默认同来源 1200 次/分钟，每个 poll_token 跨来源 60 次/分钟；不消耗密码登录预算。查询凭证仅放 JSON 请求体，不放 URL。",
         "security": [],
         "requestBody": {
           "required": true,
@@ -1282,11 +1293,21 @@
             }
           },
           "429": {
-            "description": "请求过于频繁；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -1389,11 +1410,21 @@
             }
           },
           "429": {
-            "description": "请求过于频繁；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -1418,7 +1449,18 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-TTYFish-Client-IP",
+            "in": "header",
+            "required": false,
+            "description": "仅供已认证 SSH 网关，单个 IPv4/IPv6 地址，不含端口；普通客户端提供时忽略。未提供时兼容使用直连或可信代理解析地址。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/healthz": {
@@ -1527,11 +1569,21 @@
             }
           },
           "429": {
-            "description": "来源 IP 每分钟预算用尽；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -1557,7 +1609,8 @@
             }
           }
         },
-        "security": []
+        "security": [],
+        "description": " 只有配置在 trusted-proxies CIDR 中的直连代理提供的 X-Forwarded-For 才参与来源解析，从右向左找到第一个非可信地址；默认忽略所有转发头。"
       }
     },
     "/api/v1/auth/password": {
@@ -1636,11 +1689,21 @@
             }
           },
           "429": {
-            "description": "来源 IP 每分钟预算用尽；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -1666,7 +1729,28 @@
             }
           }
         },
-        "security": []
+        "security": [],
+        "description": " 只有配置在 trusted-proxies CIDR 中的直连代理提供的 X-Forwarded-For 才参与来源解析，从右向左找到第一个非可信地址；默认忽略所有转发头。 默认普通来源 120 次/分钟、同来源同账号 10 次/分钟、同账号跨来源 30 次/分钟；已认证网关使用独立 600 次/分钟总预算，但不绕过账号限制。",
+        "parameters": [
+          {
+            "name": "X-TTYFish-Gateway-Token",
+            "in": "header",
+            "required": false,
+            "description": "SSH 网关调用公共密码登录入口时提供的服务端凭证，不能放进浏览器；存在但错误时返回 401，连续无效凭证触发 429。",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-TTYFish-Client-IP",
+            "in": "header",
+            "required": false,
+            "description": "仅供已认证 SSH 网关，单个 IPv4/IPv6 地址，不含端口；普通客户端提供时忽略。未提供时兼容使用直连或可信代理解析地址。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/v1/internal/auth/ssh": {
@@ -1752,11 +1836,21 @@
             }
           },
           "429": {
-            "description": "来源 IP 每分钟预算用尽；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -1797,7 +1891,18 @@
             "gatewayAuth": []
           }
         ],
-        "description": "网关必须先验证真实 SSH 握手签名。此接口不校验签名，不能开放为浏览器的公钥登录入口。网关凭证拥有代表玩家登录的权限，只能保存在受信任服务端。未配置网关凭证时返回 503。 verify_only=true 仅返回 account，无认证副作用。正式登录必须在成功的 SSH 签名验证后调用，返回会话并更新此公钥的 last_used_at。"
+        "description": "网关必须先验证真实 SSH 握手签名。此接口不校验签名，不能开放为浏览器的公钥登录入口。网关凭证拥有代表玩家登录的权限，只能保存在受信任服务端。未配置网关凭证时返回 503。 verify_only=true 仅返回 account，无认证副作用。正式登录必须在成功的 SSH 签名验证后调用，返回会话并更新此公钥的 last_used_at。 预检查与正式登录分别使用各自的同来源同账号 20 次/分钟、同账号跨来源 60 次/分钟预算，两者仍分别计入网关总预算。",
+        "parameters": [
+          {
+            "name": "X-TTYFish-Client-IP",
+            "in": "header",
+            "required": false,
+            "description": "仅供已认证 SSH 网关，单个 IPv4/IPv6 地址，不含端口；普通客户端提供时忽略。未提供时兼容使用直连或可信代理解析地址。",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/v1/me": {
@@ -1876,11 +1981,21 @@
             }
           },
           "429": {
-            "description": "来源 IP 每分钟预算用尽；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -1967,11 +2082,21 @@
             }
           },
           "429": {
-            "description": "来源 IP 每分钟预算用尽；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -2058,11 +2183,21 @@
             }
           },
           "429": {
-            "description": "来源 IP 每分钟预算用尽；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -2178,11 +2313,21 @@
             }
           },
           "429": {
-            "description": "来源 IP 每分钟预算用尽；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -2274,11 +2419,21 @@
             }
           },
           "429": {
-            "description": "来源 IP 每分钟预算用尽；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -2385,11 +2540,21 @@
             }
           },
           "429": {
-            "description": "来源 IP 每分钟预算用尽；Retry-After: 60",
+            "description": "分层限流或计数器容量保护；按 Retry-After 等待后重试",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "实际剩余等待秒数，向上取整；应等待后再发起请求，不自动重放已提交的游戏动作",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 60
                 }
               }
             }
@@ -3905,7 +4070,7 @@
           },
           "source_ip": {
             "type": "string",
-            "description": "创建会话时后端直连来源 IP，不信任 X-Forwarded-For；经过网关或代理时为转发节点 IP，未知为空字符串"
+            "description": "创建会话时解析出的客户端来源 IP：默认直连地址，仅接受配置的可信代理转发链或已认证网关的来源声明。未知为空字符串；历史值不回填。"
           },
           "user_agent": {
             "type": "string",
@@ -3929,6 +4094,29 @@
           "current"
         ]
       }
+    }
+  },
+  "x-rate-limits": {
+    "window_seconds": 60,
+    "scope": "单个 backend 进程内存；重启重置",
+    "defaults": {
+      "registration_per_source": 10,
+      "public_auth_per_source": 120,
+      "password_per_source_account": 10,
+      "password_per_account": 30,
+      "authenticated_gateway_total": 600,
+      "key_probe_per_source_account": 20,
+      "key_probe_per_account": 60,
+      "key_login_per_source_account": 20,
+      "key_login_per_account": 60,
+      "challenge_start_per_source_account": 10,
+      "challenge_start_per_account": 30,
+      "challenge_confirm_per_source_account": 10,
+      "challenge_confirm_per_account": 30,
+      "password_changes_per_account": 10,
+      "poll_per_source": 1200,
+      "poll_per_token": 60,
+      "invalid_gateway_credentials_per_source": 10
     }
   }
 }

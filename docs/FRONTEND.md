@@ -7,7 +7,7 @@ Vue 3 + TypeScript + Element Plus，独立于后端构建，通过 JSON API 通�
 ```bash
 # 1. 后端（账号 API）
 cd hub
-go run ./cmd/backend -addr 127.0.0.1:8081 -db /tmp/backend.db
+go run ./cmd/backend -addr 127.0.0.1:8081 -db /tmp/backend.db -cors-origins http://localhost:5173
 
 # 2. 前端
 cd web
@@ -15,9 +15,8 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
-开发时 Vite 把 `/api` 代理到 `127.0.0.1:8081`，浏览器看到的始终是同源请求，
-不需要配 CORS。后端如果要单独暴露给别的来源，启动时加
-`-cors-origins http://localhost:5173`。
+开发时 Vite 把 `/api` 代理到 `127.0.0.1:8081`，但浏览器的 Origin 仍会保留，
+所以后端也需要配置上面的来源白名单。SSH 挑战登录还需启动使用同一网关凭证的 SSH 网关，完整步骤见 [README](../README.md)。
 
 ## 页面
 
@@ -39,7 +38,8 @@ HttpOnly 的刷新令牌，而不是往 `localStorage` 里塞东西。
 所以轮询是 `POST /api/v1/auth/ssh/challenges/poll`。
 
 **轮询节奏听后端的**。创建挑战时返回 `poll_interval_ms`（1500ms），前端不能更快，
-否则会撞上每分钟 120 次的轮询预算。
+默认每个 poll_token 每分钟 60 次、每来源合计 1200 次，轮询不消耗密码登录预算。
+429 响应提供 Retry-After，跨源请求也可读取该头；应等待指定时间后再尝试，不立即循环重试。
 
 **错误提示按 code 分流**：`account_conflict` → 用户名/公钥被占用；
 `last_credential` → 不能删掉最后一种登录凭证；`rate_limited` → 稍后再试。

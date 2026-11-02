@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -65,14 +67,14 @@ func (c *Client) Health(ctx context.Context) error {
 //
 // 前提是网关**已经**完成了 SSH 握手签名验证——这个接口信任网关的结论，
 // 不能把它当成"任何人提交公钥就能登录"的入口。
-func (c *Client) LoginKey(ctx context.Context, username, publicKey string) (Player, error) {
+func (c *Client) LoginKey(ctx context.Context, username, publicKey string, clients ...string) (Player, error) {
 	body := map[string]string{"username": username, "public_key": publicKey}
-	return c.playerCall(ctx, "/api/v1/internal/auth/ssh", body, true)
+	return c.playerCall(ctx, "/api/v1/internal/auth/ssh", body, true, clients...)
 }
 
 // CheckKey checks key ownership without issuing a token or recording key usage.
-func (c *Client) CheckKey(ctx context.Context, username, publicKey string) (Account, error) {
-	status, raw, err := c.do(ctx, http.MethodPost, "/api/v1/internal/auth/ssh", map[string]any{"username": username, "public_key": publicKey, "verify_only": true}, true)
+func (c *Client) CheckKey(ctx context.Context, username, publicKey string, clients ...string) (Account, error) {
+	status, raw, err := c.do(ctx, http.MethodPost, "/api/v1/internal/auth/ssh", map[string]any{"username": username, "public_key": publicKey, "verify_only": true}, true, clients...)
 	if err != nil {
 		return Account{}, err
 	}
@@ -92,19 +94,19 @@ func (c *Client) CheckKey(ctx context.Context, username, publicKey string) (Acco
 }
 
 // LoginPassword 用用户名密码换玩家令牌。
-func (c *Client) LoginPassword(ctx context.Context, username, password string) (Player, error) {
+func (c *Client) LoginPassword(ctx context.Context, username, password string, clients ...string) (Player, error) {
 	body := map[string]string{"username": username, "password": password}
-	return c.playerCall(ctx, "/api/v1/auth/password", body, false)
+	return c.playerCall(ctx, "/api/v1/auth/password", body, false, clients...)
 }
 
 // ConfirmChallenge 确认网页登录用的一次性码。
-func (c *Client) ConfirmChallenge(ctx context.Context, username, publicKey, code string) error {
+func (c *Client) ConfirmChallenge(ctx context.Context, username, publicKey, code string, clients ...string) error {
 	body := map[string]string{
 		"username":   username,
 		"public_key": publicKey,
 		"code":       code,
 	}
-	status, raw, err := c.do(ctx, http.MethodPost, "/api/v1/internal/auth/ssh/challenges/confirm", body, true)
+	status, raw, err := c.do(ctx, http.MethodPost, "/api/v1/internal/auth/ssh/challenges/confirm", body, true, clients...)
 	if err != nil {
 		return err
 	}
@@ -114,8 +116,8 @@ func (c *Client) ConfirmChallenge(ctx context.Context, username, publicKey, code
 	return nil
 }
 
-func (c *Client) playerCall(ctx context.Context, path string, body map[string]string, gateway bool) (Player, error) {
-	status, raw, err := c.do(ctx, http.MethodPost, path, body, gateway)
+func (c *Client) playerCall(ctx context.Context, path string, body map[string]string, gateway bool, clients ...string) (Player, error) {
+	status, raw, err := c.do(ctx, http.MethodPost, path, body, gateway, clients...)
 	if err != nil {
 		return Player{}, err
 	}
@@ -132,7 +134,7 @@ func (c *Client) playerCall(ctx context.Context, path string, body map[string]st
 	return p, nil
 }
 
-func (c *Client) do(ctx context.Context, method, path string, body any, gateway bool) (int, []byte, error) {
+func (c *Client) do(ctx context.Context, method, path string, body any, gateway bool, clients ...string) (int, []byte, error) {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -146,6 +148,18 @@ func (c *Client) do(ctx context.Context, method, path string, body any, gateway 
 		return 0, nil, err
 	}
 	req.Header.Set("User-Agent", "TTYFish-SSH-Gateway")
+	if path == "/api/v1/auth/password" && c.gatewayToken != "" {
+		req.Header.Set("X-TTYFish-Gateway-Token", c.gatewayToken)
+	}
+	if len(clients) > 0 {
+		host, _, err := net.SplitHostPort(clients[0])
+		if err != nil {
+			host = clients[0]
+		}
+		if ip := net.ParseIP(host); ip != nil {
+			req.Header.Set("X-TTYFish-Client-IP", ip.String())
+		}
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -164,7 +178,20 @@ func (c *Client) do(ctx context.Context, method, path string, body any, gateway 
 	if err != nil {
 		return resp.StatusCode, nil, err
 	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		seconds, err := strconv.Atoi(resp.Header.Get("Retry-After"))
+		if err != nil || seconds < 1 {
+			seconds = 60
+		}
+		return resp.StatusCode, raw, &RateLimitError{RetryAfterSeconds: seconds}
+	}
 	return resp.StatusCode, raw, nil
+}
+
+type RateLimitError struct{ RetryAfterSeconds int }
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("尝试太频繁，请在 %d 秒后重试", e.RetryAfterSeconds)
 }
 
 type apiErrorBody struct {

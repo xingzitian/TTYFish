@@ -151,7 +151,7 @@ func New(cfg Config) (*ssh.Server, error) {
 			}
 			callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			p, err := cfg.Accounts.LoginPassword(callCtx, ctx.User(), password)
+			p, err := cfg.Accounts.LoginPassword(callCtx, ctx.User(), password, ctx.RemoteAddr().String())
 			if err != nil {
 				slog.Warn("密码登录失败", "user", ctx.User(), "err", err)
 				return false
@@ -172,7 +172,7 @@ func New(cfg Config) (*ssh.Server, error) {
 				return false
 			}
 			// SSH 协议可能重复询问同一公钥，所以预检查成功就缓存，
-			// 第二次直接复用——否则会白烧一次后端每分钟 10 次的限流预算。
+			// 第二次直接复用，避免重复消耗探测预算。
 			cacheKey := ctx.User() + "|" + fp + "|" + ctx.RemoteAddr().String()
 			if p, ok := takeLogin(cacheKey); ok {
 				storePlayer(ctx, p)
@@ -180,7 +180,7 @@ func New(cfg Config) (*ssh.Server, error) {
 			}
 			callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			account, err := cfg.Accounts.CheckKey(callCtx, ctx.User(), strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))))
+			account, err := cfg.Accounts.CheckKey(callCtx, ctx.User(), strings.TrimSpace(string(gossh.MarshalAuthorizedKey(key))), ctx.RemoteAddr().String())
 			if err != nil {
 				slog.Warn("密钥登录失败", "user", ctx.User(), "fingerprint", fp, "err", err)
 				return false
@@ -291,7 +291,7 @@ func finalizeKeySession(s ssh.Session, accounts *backend.Client) error {
 	}
 	ctx, cancel := context.WithTimeout(s.Context(), 10*time.Second)
 	defer cancel()
-	p, err := accounts.LoginKey(ctx, s.User(), strings.TrimSpace(string(gossh.MarshalAuthorizedKey(s.PublicKey()))))
+	p, err := accounts.LoginKey(ctx, s.User(), strings.TrimSpace(string(gossh.MarshalAuthorizedKey(s.PublicKey()))), s.RemoteAddr().String())
 	if err != nil {
 		return err
 	}
@@ -329,7 +329,7 @@ func handleAuth(s ssh.Session, accounts *backend.Client) bool {
 	callCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	pub := strings.TrimSpace(string(gossh.MarshalAuthorizedKey(s.PublicKey())))
-	if err := accounts.ConfirmChallenge(callCtx, s.User(), pub, code); err != nil {
+	if err := accounts.ConfirmChallenge(callCtx, s.User(), pub, code, s.RemoteAddr().String()); err != nil {
 		slog.Warn("挑战确认失败", "user", s.User(), "fingerprint", Fingerprint(s.PublicKey()), "err", err)
 		fmt.Fprintf(s, "确认失败：%v\n", err)
 		return true

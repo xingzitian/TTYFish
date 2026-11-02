@@ -48,8 +48,6 @@ type Repository interface {
 	Identities(string) ([]store.Identity, error)
 	Link(string, string, string) error
 	RemoveIdentity(string, string) (bool, error)
-	AllowPasswordAttempt(string) bool
-	AllowPollAttempt(string) bool
 	NewAPIChallenge(string, time.Duration) (store.Challenge, error)
 	ConfirmAPIChallenge(string, string, string) error
 	RedeemAPIChallenge(string, time.Duration, ...store.ClientInfo) (string, store.Account, string, error)
@@ -210,8 +208,7 @@ func (s *Service) Current(token string) (Account, error) {
 	}
 	return view(a), nil
 }
-func (s *Service) Logout(token string) error       { return s.repo.DropSession(token) }
-func (s *Service) AllowAttempt(remote string) bool { return s.repo.AllowPasswordAttempt(remote) }
+func (s *Service) Logout(token string) error { return s.repo.DropSession(token) }
 func (s *Service) SetPassword(id, password string) error {
 	if err := validatePassword(password); err != nil {
 		return err

@@ -87,4 +87,3 @@ func (s *Service) PollSSHChallenge(token string, clients ...ClientInfo) (Challen
 	}
 	return result, nil
 }
-func (s *Service) AllowPollAttempt(remote string) bool { return s.repo.AllowPollAttempt(remote) }

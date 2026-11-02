@@ -100,6 +100,10 @@ chmod 440 /etc/sudoers.d/ttyfish-deploy && visudo -cf /etc/sudoers.d/ttyfish-dep
 
 ## 踩过的坑
 
+认证限流采用来源、账号与已认证网关的分层预算。backend 可用 `-rate-limit-auth-ip`（默认 120/分钟）和 `-rate-limit-gateway`（默认 600/分钟）调整总预算。网关应同步升级，以便转发实际 SSH 客户端 IP。
+
+反向代理后若要按玩家 IP 限流，需在 backend 启动参数中显式设置 `-trusted-proxies` 为真实代理地址的 CIDR。默认忽略转发头；不能信任所有公网地址，也不能根据请求中的 User-Agent 判断网关身份。代理必须覆盖来源头或在链条右端追加实际连接地址，例如 Nginx 的 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`。容器代理的地址未必是回环地址，请以实际连接为准。具体默认额度、来源解析与 Retry-After 约定见 [后端 API](BACKEND_API.md)。
+
 - **`scp` 的端口是大写 `-P`**，写成 `-p` 会把端口当成文件名
 - **`authorized_keys` 里要放公钥内容**，不是 `ssh-keygen -lf` 打印的指纹
 - **私钥从 Windows 粘进 secret 会带 `\r`**，`ssh` 会拒绝；脚本里统一 `tr -d '\r'`

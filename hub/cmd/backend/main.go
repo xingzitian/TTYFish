@@ -32,6 +32,9 @@ func run() error {
 	addr := flag.String("addr", "127.0.0.1:8081", "核心后端 API 监听地址")
 	db := flag.String("db", "backend.db", "账号数据库文件")
 	origins := flag.String("cors-origins", "", "允许的浏览器来源，逗号分隔，例如 http://localhost:5173")
+	proxies := flag.String("trusted-proxies", "", "可信反向代理 CIDR，逗号分隔；为空时忽略 X-Forwarded-For")
+	authIPLimit := flag.Int("rate-limit-auth-ip", 120, "普通来源每分钟密码登录与挑战创建请求预算")
+	gatewayLimit := flag.Int("rate-limit-gateway", 600, "已认证网关每分钟请求总预算")
 	flag.Parse()
 	st, err := store.Open(*db)
 	if err != nil {
@@ -43,7 +46,12 @@ func run() error {
 		return err
 	}
 	defer games.Close()
-	cfg := api.Config{GatewayToken: os.Getenv("TTYFISH_GATEWAY_TOKEN"), Games: games}
+	cfg := api.Config{GatewayToken: os.Getenv("TTYFISH_GATEWAY_TOKEN"), Games: games, RateLimits: api.RateLimits{PublicAuthIP: *authIPLimit, GatewayRequests: *gatewayLimit}}
+	if *proxies != "" {
+		for _, proxy := range strings.Split(*proxies, ",") {
+			cfg.TrustedProxies = append(cfg.TrustedProxies, strings.TrimSpace(proxy))
+		}
+	}
 	if *origins != "" {
 		for _, origin := range strings.Split(*origins, ",") {
 			cfg.AllowedOrigins = append(cfg.AllowedOrigins, strings.TrimSpace(origin))

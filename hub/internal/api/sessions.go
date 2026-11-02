@@ -1,22 +1,14 @@
 package api
 
 import (
-	"net"
 	"net/http"
 	"strings"
 
 	"github.com/xingzitian/TTYFish/hub/internal/account"
 )
 
-func clientInfo(r *http.Request) account.ClientInfo {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	ip := ""
-	if parsed := net.ParseIP(host); parsed != nil {
-		ip = parsed.String()
-	}
+func (s *Server) clientInfo(r *http.Request, gateway bool) account.ClientInfo {
+	ip, _ := s.sources.ip(r, gateway)
 	// This is descriptive client data, never an authentication signal.
 	agent := []rune(strings.ToValidUTF8(r.UserAgent(), "�"))
 	if len(agent) > 512 {

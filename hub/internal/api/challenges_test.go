@@ -61,7 +61,7 @@ func TestSSHChallengeValidationAndIndependentPollBudget(t *testing.T) {
 		f.request("POST", "/api/v1/auth/ssh/challenges/poll", "", map[string]string{"poll_token": strings.Repeat("0", 64)}, 200)
 	}
 	f.request("POST", "/api/v1/auth/password", "", map[string]string{"username": "alice", "password": "alice-password-123"}, 200)
-	for i := 22; i < 120; i++ {
+	for i := 21; i < 60; i++ {
 		f.request("POST", "/api/v1/auth/ssh/challenges/poll", "", map[string]string{"poll_token": strings.Repeat("0", 64)}, 200)
 	}
 	f.request("POST", "/api/v1/auth/ssh/challenges/poll", "", map[string]string{"poll_token": strings.Repeat("0", 64)}, 429)

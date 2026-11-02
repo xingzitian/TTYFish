@@ -2,8 +2,6 @@
 package api
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,10 +12,13 @@ import (
 
 	"github.com/xingzitian/TTYFish/hub/internal/account"
 	"github.com/xingzitian/TTYFish/hub/internal/play"
+	"github.com/xingzitian/TTYFish/hub/internal/ratelimit"
 )
 
 type Config struct {
-	Games *play.Service
+	TrustedProxies []string
+	RateLimits     RateLimits
+	Games          *play.Service
 	// GatewayToken authenticates trusted SSH gateways, never browser clients.
 	GatewayToken   string
 	AllowedOrigins []string
@@ -26,6 +27,9 @@ type Server struct {
 	accounts *account.Service
 	cfg      Config
 	mux      *http.ServeMux
+	limiter  *ratelimit.Limiter
+	rates    RateLimits
+	sources  sourceResolver
 }
 
 func New(accounts *account.Service, cfg Config) (*Server, error) {
@@ -37,7 +41,15 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 			return nil, errors.New("CORS 必须配置明确的来源")
 		}
 	}
-	s := &Server{accounts: accounts, cfg: cfg, mux: http.NewServeMux()}
+	rates, err := cfg.RateLimits.defaults()
+	if err != nil {
+		return nil, err
+	}
+	sources, err := newSourceResolver(cfg.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{accounts: accounts, cfg: cfg, mux: http.NewServeMux(), rates: rates, sources: sources, limiter: ratelimit.New(20000)}
 	s.mux.HandleFunc("GET /api/openapi.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_, _ = w.Write(openAPISpec)
@@ -82,6 +94,7 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Expose-Headers", "Retry-After")
 			if r.Method == http.MethodOptions {
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
@@ -169,16 +182,8 @@ func (s *Server) current(w http.ResponseWriter, r *http.Request) (account.Accoun
 	}
 	return a, true
 }
-func (s *Server) allow(w http.ResponseWriter, r *http.Request) bool {
-	if !s.accounts.AllowAttempt(r.RemoteAddr) {
-		w.Header().Set("Retry-After", "60")
-		failure(w, 429, "rate_limited", "请求过于频繁，请稍后重试")
-		return false
-	}
-	return true
-}
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
-	if !s.allow(w, r) {
+	if !s.aggregate(w, r, false, "register", s.rates.RegistrationIP) {
 		return
 	}
 	var body registration
@@ -193,14 +198,21 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	respond(w, 201, a)
 }
 func (s *Server) password(w http.ResponseWriter, r *http.Request) {
-	if !s.allow(w, r) {
+	gateway, ok := s.passwordGateway(w, r)
+	if !ok {
+		return
+	}
+	if !s.aggregate(w, r, gateway, "public-auth", s.rates.PublicAuthIP) {
 		return
 	}
 	var body credentials
 	if !decode(w, r, &body) {
 		return
 	}
-	session, err := s.accounts.LoginPassword(body.Username, body.Password, clientInfo(r))
+	if !s.accountBudget(w, r, gateway, "password", body.Username, false) {
+		return
+	}
+	session, err := s.accounts.LoginPassword(body.Username, body.Password, s.clientInfo(r, gateway))
 	if err != nil {
 		report(w, err)
 		return
@@ -212,9 +224,8 @@ func (s *Server) requireGateway(w http.ResponseWriter, r *http.Request) bool {
 		failure(w, 503, "gateway_disabled", "未启用 SSH 网关认证")
 		return false
 	}
-	supplied, expected := sha256.Sum256([]byte(bearer(r))), sha256.Sum256([]byte(s.cfg.GatewayToken))
-	if subtle.ConstantTimeCompare(supplied[:], expected[:]) != 1 {
-		failure(w, 401, "gateway_unauthorized", "无效的网关凭证")
+	if !s.gatewayTokenMatches(bearer(r)) {
+		s.rejectGateway(w, r)
 		return false
 	}
 	return true
@@ -223,7 +234,7 @@ func (s *Server) keyLogin(w http.ResponseWriter, r *http.Request) {
 	if !s.requireGateway(w, r) {
 		return
 	}
-	if !s.allow(w, r) {
+	if !s.aggregate(w, r, true, "", 0) {
 		return
 	}
 	var body struct {
@@ -232,6 +243,13 @@ func (s *Server) keyLogin(w http.ResponseWriter, r *http.Request) {
 		VerifyOnly bool   `json:"verify_only,omitempty"`
 	}
 	if !decode(w, r, &body) {
+		return
+	}
+	scope := "key-login"
+	if body.VerifyOnly {
+		scope = "key-check"
+	}
+	if !s.accountBudget(w, r, true, scope, body.Username, true) {
 		return
 	}
 	if body.VerifyOnly {
@@ -243,7 +261,7 @@ func (s *Server) keyLogin(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]any{"account": a})
 		return
 	}
-	session, err := s.accounts.LoginVerifiedKey(body.Username, body.PublicKey, clientInfo(r))
+	session, err := s.accounts.LoginVerifiedKey(body.Username, body.PublicKey, s.clientInfo(r, true))
 	if err != nil {
 		report(w, err)
 		return
@@ -270,7 +288,7 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !s.allow(w, r) {
+	if !s.take(w, bucket("password-change", a.ID, s.rates.PasswordChanges)) {
 		return
 	}
 	var body struct {
