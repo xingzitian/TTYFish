@@ -37,7 +37,8 @@ func TestConfirmIgnoresOtherKeys(t *testing.T) {
 	pressEsc(r)
 
 	before := strip(r.View())
-	for _, key := range []string{"1", "2", "u", "d", "t", "i", "q", "enter"} {
+	// q 不在此列：它是确认态里的逃生口，另有 TestQEscapeFromConfirm 覆盖
+	for _, key := range []string{"1", "2", "u", "d", "t", "i", "enter"} {
 		if key == "enter" {
 			r.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		} else {

@@ -461,7 +461,7 @@ func (m *Model) viewLobby() string {
 	if m.snap.IsHost {
 		keys = "s 开始 · b 补一个电脑"
 	}
-	keys += " · i 界面 · t 快捷语 · v 重开投票 · l 离开 · q 退出"
+	keys += " · i 界面 · t 快捷语 · v 重开投票 · l 离开 · q 断开连接"
 	b.WriteString(m.dim().Render(keys))
 	if m.errMsg != "" {
 		b.WriteString("\n" + m.warn().Render("! "+m.errMsg))

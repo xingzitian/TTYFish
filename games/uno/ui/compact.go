@@ -353,7 +353,7 @@ func (m *Model) compactLobbyCmd() string {
 	} else {
 		items = append(items, "等房主开始")
 	}
-	items = append(items, "[T]聊天", "[V]投票", "[Q]离开", "[I]界面")
+	items = append(items, "[T]聊天", "[V]投票", "[Esc]离开", "[I]界面")
 
 	body := "[CMD] " + strings.Join(items, " ")
 	for len([]rune(body)) > m.width && len(items) > 1 {

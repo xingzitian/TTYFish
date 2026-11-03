@@ -3,7 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError, api } from '../api/client'
-import type { Key, SessionInfo } from '../api/types'
+import type { Key, Points, SessionInfo } from '../api/types'
 import { useAuth } from '../stores/auth'
 
 const router = useRouter()
@@ -15,6 +15,7 @@ const newKey = ref('')
 const newKeyName = ref('')
 const addingKey = ref(false)
 
+const points = ref<Points | null>(null)
 const sessions = ref<SessionInfo[]>([])
 const sessionsLoading = ref(false)
 
@@ -53,6 +54,15 @@ async function loadKeys(): Promise<void> {
     fail(err, '读取公钥失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadPoints(): Promise<void> {
+  try {
+    points.value = await api.points()
+  } catch (err) {
+    // 余额取不到不影响其它功能，安静降级成占位
+    fail(err, '读取 PT 余额失败')
   }
 }
 
@@ -239,7 +249,7 @@ onMounted(async () => {
     await handleExpired()
     return
   }
-  await Promise.all([loadKeys(), loadSessions()])
+  await Promise.all([loadKeys(), loadSessions(), loadPoints()])
 })
 </script>
 
@@ -250,8 +260,12 @@ onMounted(async () => {
         <h1 class="page-title" style="margin: 0">我的账号</h1>
         <span class="hint">
           @{{ auth.state.account?.username }}
-          <el-button text size="small" @click="doLogout">退出</el-button>
         </span>
+        <el-tag v-if="points" type="warning" effect="dark" round>
+          {{ points.balance_pt }} PT
+        </el-tag>
+        <el-tag v-else type="info" effect="plain" round>— PT</el-tag>
+        <el-button text size="small" @click="doLogout">退出</el-button>
       </div>
       <p class="page-sub">
         账号 ID <span class="fp">{{ auth.state.account?.id }}</span>

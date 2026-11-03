@@ -308,20 +308,30 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 
 	// 大厅 / 结算界面：可以离开，房主可以补电脑、开局。
 	if m.snap.Phase != client.Playing {
-		if key == "l" {
+		switch key {
+		case "l":
 			m.leave()
-			return nil
-		}
-		if m.snap.IsHost && m.c != nil {
-			switch key {
-			case "b", "c":
-				if err := m.c.AddBot(); err != nil {
+		case "s":
+			// 非房主按了要有回应。以前这里直接 return，屏幕上什么都没有，
+			// 成员会以为"这界面的按键全坏了"。
+			if !m.snap.IsHost {
+				m.fail("只有房主能开局，等房主按 s")
+				return nil
+			}
+			if m.c != nil {
+				if err := m.c.Start(); err != nil {
 					m.fail(err.Error())
 				} else {
 					m.fail("")
 				}
-			case "s":
-				if err := m.c.Start(); err != nil {
+			}
+		case "b", "c":
+			if !m.snap.IsHost {
+				m.fail("只有房主能加电脑")
+				return nil
+			}
+			if m.c != nil {
+				if err := m.c.AddBot(); err != nil {
 					m.fail(err.Error())
 				} else {
 					m.fail("")

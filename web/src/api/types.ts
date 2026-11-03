@@ -20,6 +20,12 @@ export interface Key {
   last_used_at: string | null
 }
 
+/** PT 余额。balance_pt 是后端算好的展示值，前端不要自己拿 tenths 去除。 */
+export interface Points {
+  balance_tenths: number
+  balance_pt: string
+}
+
 export interface Session {
   access_token: string
   token_type: 'Bearer'

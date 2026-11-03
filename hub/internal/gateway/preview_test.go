@@ -22,9 +22,14 @@ func (m *fakeModel) View() string                        { return "牌桌" }
 func (m *fakeModel) Close()                              {}
 
 // fakeClient 只记录 Join。
-type fakeClient struct{ joined string }
+type fakeClient struct {
+	joined string
+	phase  client.Phase
+}
 
-func (c *fakeClient) Snapshot() client.Snapshot { return client.Snapshot{Code: c.joined} }
+func (c *fakeClient) Snapshot() client.Snapshot {
+	return client.Snapshot{Code: c.joined, Phase: c.phase}
+}
 func (c *fakeClient) Updates() <-chan client.Snapshot {
 	ch := make(chan client.Snapshot)
 	close(ch)

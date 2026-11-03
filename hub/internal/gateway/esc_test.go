@@ -37,7 +37,8 @@ func newEscRoot(t *testing.T, model registry.Model) *Root {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	fake := &fakeClient{}
+	// 默认当成"对局进行中"：这些用例关心的是 Esc 的确认流程
+	fake := &fakeClient{phase: client.Playing}
 	r := New(Deps{
 		Registry: reg,
 		Player:   backend.Player{Account: backend.Account{ID: "acc-1", Username: "x"}},

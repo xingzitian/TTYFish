@@ -4,6 +4,7 @@ import type {
   ChallengeState,
   Key,
   Session,
+  Points,
   SessionInfo,
   SSHChallenge,
 } from './types'
@@ -126,6 +127,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     })
+  },
+
+  /** 当前账号的 PT 余额 */
+  points() {
+    return request<Points>('/api/v1/me/points')
   },
 
   listKeys() {

@@ -95,6 +95,8 @@ type Root struct {
 	join            textinput.Model
 	joinErr         string
 	settingsMessage string
+	// balancePT 是标题栏显示的 PT 余额；空表示还没查到（显示 —pt）。
+	balancePT string
 
 	game registry.Model
 	conn *remote.Client
@@ -137,11 +139,40 @@ func (r *Root) Init() tea.Cmd {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	var cmds []tea.Cmd
+	if c := r.refreshPoints(); c != nil {
+		cmds = append(cmds, c)
+	}
 	if r.deps.ResumeMode && r.resume() {
-		return r.game.Init()
+		cmds = append(cmds, r.game.Init())
+		return tea.Batch(cmds...)
 	}
 	r.gotoLevel(levelHome)
-	return nil
+	return tea.Batch(cmds...)
+}
+
+// pointsMsg 是异步查回来的余额。
+type pointsMsg struct {
+	pt  string
+	err error
+}
+
+// refreshPoints 发一个查余额的命令；拿不到令牌时返回 nil（预览模式）。
+func (r *Root) refreshPoints() tea.Cmd {
+	if r.deps.Accounts == nil || r.deps.Player.Token == "" {
+		return nil
+	}
+	accounts := r.deps.Accounts
+	token := r.deps.Player.Token
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		p, err := accounts.PlayerPoints(ctx, token)
+		if err != nil {
+			return pointsMsg{err: err}
+		}
+		return pointsMsg{pt: p.BalancePT}
+	}
 }
 
 // prefKey 是偏好读写用的键，必须和游戏界面用的那个一致。
@@ -256,18 +287,25 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key, ok := msg.(tea.KeyMsg); ok && !r.gameHasModal() {
 			switch {
 			case r.confirmLeave:
-				// 确认中只认三个键，其它一律忽略——这时最怕误触
+				// 确认中只认几个键，其它一律忽略——这时最怕误触。
+				// q 仍然保留：万一确认框让人以为卡死了，老板键必须还能用。
 				switch key.String() {
 				case "y":
-					r.leaveRoom()
-					return r, nil
+					return r, r.leaveRoom()
 				case "n", "esc":
 					return r, r.setConfirmLeave(false)
+				case "q":
+					r.quit = true
+					return r, tea.Quit
 				}
 				return r, nil
 			case key.String() == "esc":
-				// 离开对局要确认：手快按一下不至于把局丢了
-				return r, r.setConfirmLeave(true)
+				// 对局进行中才问：手快按一下不至于把打了一半的局丢了。
+				// 大厅里（还没开局）离开是低风险操作，直接走，别让人以为卡住了。
+				if r.inGame() {
+					return r, r.setConfirmLeave(true)
+				}
+				return r, r.leaveRoom()
 			case key.String() == "q":
 				// 老板键：立刻断开这条连接，终端回到本地提示符，
 				// 旁人看到的就是"这人干完活退出了"。不留确认，要的就是快。
@@ -289,10 +327,27 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, cmd
 	}
 
+	if p, ok := msg.(pointsMsg); ok {
+		if p.err == nil {
+			r.balancePT = p.pt
+		} else {
+			slog.Warn("查询 PT 余额失败", "err", p.err)
+		}
+		return r, nil
+	}
+
 	if key, ok := msg.(tea.KeyMsg); ok {
 		return r, r.handleKey(key)
 	}
 	return r, nil
+}
+
+// inGame 表示这一局已经开打了（不是还在大厅等人）。
+func (r *Root) inGame() bool {
+	if r.roomClient == nil {
+		return false
+	}
+	return r.roomClient.Snapshot().Phase == client.Playing
 }
 
 // gameHasModal 问游戏界面现在有没有弹窗占着键盘。
@@ -329,7 +384,7 @@ func (r *Root) setConfirmLeave(v bool) tea.Cmd {
 //
 // 这是"我退出这局"，和"关掉 SSH"不是一回事：关掉连接时座位会保留、
 // 由电脑代打，回来还能接上；这里是真的走人。
-func (r *Root) leaveRoom() {
+func (r *Root) leaveRoom() tea.Cmd {
 	client_ := r.roomClient
 	game := r.game
 	r.confirmLeave = false
@@ -343,6 +398,8 @@ func (r *Root) leaveRoom() {
 		}
 	}
 	r.gotoLevel(levelGame)
+	// 一局打完可能拿到奖励，回到菜单时重新拉一次余额
+	return r.refreshPoints()
 }
 
 // gameMsg 把窗口尺寸减掉标题栏那一行再转给游戏界面。
@@ -559,7 +616,11 @@ func (r *Root) header() string {
 	if version == "" {
 		version = "dev"
 	}
-	left := fmt.Sprintf("TTYFish %s | [USER] %s (—pt)", version, r.deps.Player.Account.Username)
+	balance := "—pt"
+	if r.balancePT != "" {
+		balance = r.balancePT + "pt"
+	}
+	left := fmt.Sprintf("TTYFish %s | [USER] %s (%s)", version, r.deps.Player.Account.Username, balance)
 	right := r.level.title()
 
 	dim := r.deps.Renderer.NewStyle().Foreground(lipgloss.Color("244"))

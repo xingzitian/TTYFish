@@ -112,6 +112,30 @@ func (c *Client) SetPasswordLoginEnabled(ctx context.Context, token string, enab
 	return nil
 }
 
+// Points 是账号的 PT 余额。
+type Points struct {
+	// BalanceTenths 以 0.1 PT 为单位；BalancePT 是带一位小数的字符串，
+	// 后端直接给了展示用的值，客户端不要自己去算浮点。
+	BalanceTenths int64  `json:"balance_tenths"`
+	BalancePT     string `json:"balance_pt"`
+}
+
+// PlayerPoints 查当前玩家的 PT 余额。
+func (c *Client) PlayerPoints(ctx context.Context, token string) (Points, error) {
+	status, raw, err := c.doAuthorized(ctx, http.MethodGet, "/api/v1/me/points", nil, token)
+	if err != nil {
+		return Points{}, err
+	}
+	if status != http.StatusOK {
+		return Points{}, apiError(status, raw)
+	}
+	var p Points
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return Points{}, err
+	}
+	return p, nil
+}
+
 // ConfirmChallenge 确认网页登录用的一次性码。
 func (c *Client) ConfirmChallenge(ctx context.Context, username, publicKey, code string, clients ...string) error {
 	body := map[string]string{
