@@ -6,6 +6,8 @@ export interface Account {
   username: string
   display_name: string
   created_at: string
+  password_login_enabled: boolean
+  has_ssh_key: boolean
 }
 
 export interface Key {

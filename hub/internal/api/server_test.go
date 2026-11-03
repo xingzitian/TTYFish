@@ -116,13 +116,24 @@ func TestAccountLifecycle(t *testing.T) {
 	if session.AccessToken == "" || session.Account.ID != a.ID || session.ExpiresIn != 86400 {
 		t.Fatal("incorrect session")
 	}
+	f.request("PUT", "/api/v1/me/password-login", session.AccessToken, map[string]bool{"enabled": false}, 409)
 	current := read[account.Account](t, f.request("GET", "/api/v1/me", session.AccessToken, nil, 200))
-	if current.Username != "alice" {
+	if current.Username != "alice" || !current.PasswordLoginEnabled || current.HasSSHKey {
 		t.Fatal("incorrect account")
 	}
 	f.request("GET", "/api/v1/me", "", nil, 401)
 	pub := key(t)
 	saved := read[account.Key](t, f.request("POST", "/api/v1/me/keys", session.AccessToken, map[string]string{"public_key": pub}, 201))
+	f.request("PUT", "/api/v1/me/password-login", session.AccessToken, map[string]bool{"enabled": false}, 204)
+	f.request("POST", "/api/v1/auth/password", "", registration, 401)
+	if _, err := f.service.LoginVerifiedKey("alice", pub); err != nil {
+		t.Fatalf("SSH key login failed after disabling password login: %v", err)
+	}
+	current = read[account.Account](t, f.request("GET", "/api/v1/me", session.AccessToken, nil, 200))
+	if current.PasswordLoginEnabled || !current.HasSSHKey {
+		t.Fatal("password-login settings were not updated")
+	}
+	f.request("PUT", "/api/v1/me/password-login", session.AccessToken, map[string]bool{"enabled": true}, 204)
 	var list struct {
 		Items []account.Key `json:"items"`
 	}
@@ -244,7 +255,7 @@ func TestOpenAPIContractIsServed(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 28 {
+	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 29 {
 		t.Fatalf("unexpected contract: %s, %d paths", spec.OpenAPI, len(spec.Paths))
 	}
 	var version struct {

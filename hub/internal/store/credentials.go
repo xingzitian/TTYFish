@@ -24,6 +24,7 @@ func (s *Store) RemoveIdentity(id, fp string) (bool, error) {
 	}
 	defer tx.Rollback()
 	var owns, keys, passwords int
+	var passwordLoginEnabled bool
 	if err = tx.QueryRow(`SELECT COUNT(*) FROM identities WHERE account_id=? AND fingerprint=?`, id, fp).Scan(&owns); err != nil {
 		return false, err
 	}
@@ -36,7 +37,10 @@ func (s *Store) RemoveIdentity(id, fp string) (bool, error) {
 	if err = tx.QueryRow(`SELECT COUNT(*) FROM passwords WHERE account_id=?`, id).Scan(&passwords); err != nil {
 		return false, err
 	}
-	if keys <= 1 && passwords == 0 {
+	if err = tx.QueryRow(`SELECT password_login_enabled FROM accounts WHERE id=?`, id).Scan(&passwordLoginEnabled); err != nil {
+		return false, err
+	}
+	if keys <= 1 && (passwords == 0 || !passwordLoginEnabled) {
 		return false, ErrLastCredential
 	}
 	if _, err = tx.Exec(`DELETE FROM identities WHERE account_id=? AND fingerprint=?`, id, fp); err != nil {

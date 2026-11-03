@@ -77,8 +77,8 @@ func (s *Store) RegisterNamed(handle, password, fp, publicKey, name string) (Acc
 		return Account{}, err
 	}
 	defer tx.Rollback()
-	a := Account{ID: randomID(), Handle: handle, Display: handle, CreatedAt: time.Now()}
-	if _, err = tx.Exec(`INSERT INTO accounts(id,handle,display,created_at) VALUES(?,?,?,?)`, a.ID, a.Handle, a.Display, a.CreatedAt.UnixMilli()); err != nil {
+	a := Account{ID: randomID(), Handle: handle, Display: handle, CreatedAt: time.Now(), PasswordLoginEnabled: true, HasSSHKey: fp != ""}
+	if _, err = tx.Exec(`INSERT INTO accounts(id,handle,display,created_at,password_login_enabled) VALUES(?,?,?,?,1)`, a.ID, a.Handle, a.Display, a.CreatedAt.UnixMilli()); err != nil {
 		return Account{}, accountWriteError(err)
 	}
 	if fp != "" {
@@ -142,7 +142,11 @@ func (s *Store) AuthenticatePassword(handle, password string) (Account, bool) {
 		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
 		return Account{}, false
 	}
-	return a, bcrypt.CompareHashAndPassword([]byte(digest), []byte(password)) == nil
+	matched := bcrypt.CompareHashAndPassword([]byte(digest), []byte(password)) == nil
+	if !a.PasswordLoginEnabled {
+		return Account{}, false
+	}
+	return a, matched
 }
 
 func (s *Store) SetPassword(id, password string) error {
@@ -153,6 +157,37 @@ func (s *Store) SetPassword(id, password string) error {
 	if err != nil {
 		return err
 	}
+
 	_, err = s.db.Exec(`INSERT INTO passwords(account_id,digest) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET digest=excluded.digest`, id, digest)
 	return err
+}
+
+func (s *Store) SetPasswordLoginEnabled(id string, enabled bool) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if !enabled {
+		var keys int
+		if err = tx.QueryRow(`SELECT COUNT(*) FROM identities WHERE account_id=?`, id).Scan(&keys); err != nil {
+			return err
+		}
+		if keys == 0 {
+			return ErrLastCredential
+		}
+	}
+	result, err := tx.Exec(`UPDATE accounts SET password_login_enabled=? WHERE id=?`, enabled, id)
+	if err != nil {
+		return err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return fmt.Errorf("账号不存在")
+	}
+	return tx.Commit()
 }

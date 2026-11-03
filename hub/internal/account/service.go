@@ -45,6 +45,7 @@ type Repository interface {
 	SessionAccount(string) (store.Account, bool, error)
 	DropSession(string) error
 	SetPassword(string, string) error
+	SetPasswordLoginEnabled(string, bool) error
 	Identities(string) ([]store.Identity, error)
 	Link(string, string, string) error
 	RemoveIdentity(string, string) (bool, error)
@@ -58,10 +59,12 @@ type Service struct{ repo Repository }
 func New(repo Repository) *Service { return &Service{repo: repo} }
 
 type Account struct {
-	ID          string    `json:"id"`
-	Username    string    `json:"username"`
-	DisplayName string    `json:"display_name"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID                   string    `json:"id"`
+	Username             string    `json:"username"`
+	DisplayName          string    `json:"display_name"`
+	CreatedAt            time.Time `json:"created_at"`
+	PasswordLoginEnabled bool      `json:"password_login_enabled"`
+	HasSSHKey            bool      `json:"has_ssh_key"`
 }
 type Session struct {
 	AccessToken string  `json:"access_token"`
@@ -77,7 +80,12 @@ type Key struct {
 	LastUsedAt  *time.Time `json:"last_used_at"`
 }
 
-func view(a store.Account) Account { return Account{a.ID, a.Handle, a.Display, a.CreatedAt} }
+func view(a store.Account) Account {
+	return Account{
+		ID: a.ID, Username: a.Handle, DisplayName: a.Display, CreatedAt: a.CreatedAt,
+		PasswordLoginEnabled: a.PasswordLoginEnabled, HasSSHKey: a.HasSSHKey,
+	}
+}
 
 // ParsePublicKey accepts exactly one authorized_keys entry without options.
 func ParsePublicKey(text string) (string, string, error) {
@@ -214,6 +222,14 @@ func (s *Service) SetPassword(id, password string) error {
 		return err
 	}
 	return s.repo.SetPassword(id, password)
+}
+
+func (s *Service) SetPasswordLoginEnabled(id string, enabled bool) error {
+	if err := s.repo.SetPasswordLoginEnabled(id, enabled); errors.Is(err, store.ErrLastCredential) {
+		return ErrLastCredential
+	} else {
+		return err
+	}
 }
 func (s *Service) Keys(id string) ([]Key, error) {
 	items, err := s.repo.Identities(id)

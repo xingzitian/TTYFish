@@ -24,7 +24,7 @@ npm run dev          # http://localhost:5173
 |---|---|
 | `/login` | SSH 挑战登录（拿确认码 → 终端执行 → 自动跳转）、密码登录 |
 | `/register` | 注册：固定用户名 + 公钥 / 密码（至少一项） |
-| `/account` | 账号信息、公钥列表（增删）、设置/修改密码、退出 |
+| `/account` | 账号信息、公钥列表（增删）、密码登录开关、设置/修改密码、退出 |
 
 未登录访问 `/account` 会被路由守卫弹回 `/login`。
 
@@ -42,7 +42,7 @@ HttpOnly 的刷新令牌，而不是往 `localStorage` 里塞东西。
 429 响应提供 Retry-After，跨源请求也可读取该头；应等待指定时间后再尝试，不立即循环重试。
 
 **错误提示按 code 分流**：`account_conflict` → 用户名/公钥被占用；
-`last_credential` → 不能删掉最后一种登录凭证；`rate_limited` → 稍后再试。
+`last_credential` → 至少保留一把 SSH 公钥或启用密码登录；`rate_limited` → 稍后再试。
 
 ## 构建
 

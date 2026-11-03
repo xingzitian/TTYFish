@@ -21,6 +21,7 @@
 | ✅ | `POST /api/v1/auth/ssh/challenges/poll` | 轮询领取会话 |
 | ✅ | `GET /api/v1/me` | 当前账号 |
 | ✅ | `PUT /api/v1/me/password` | 设置/修改密码 |
+| ✅ | `PUT /api/v1/me/password-login` | 开启/关闭密码登录 |
 | ✅ | `GET /api/v1/me/keys` | 公钥列表 |
 | ✅ | `POST /api/v1/me/keys` | 添加公钥 |
 | ✅ | `DELETE /api/v1/me/keys/{fingerprint}` | 删除公钥 |

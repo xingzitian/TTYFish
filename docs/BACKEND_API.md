@@ -78,6 +78,12 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 Invoke-RestMethod 'http://127.0.0.1:8081/api/v1/version'
 ```
 
+### 密码登录开关
+
+使用 `PUT /api/v1/me/password-login`，携带玩家会话并提交 `{"enabled":false}` 关闭当前账号的密码登录；提交 `{"enabled":true}` 重新开启。成功返回 `204 No Content`。关闭只禁用密码认证，不删除密码，SSH 公钥登录及 SSH 挑战网页登录不受影响。密码登录默认开启，兼容已有账号。
+
+关闭前必须绑定至少一把 SSH 公钥；否则返回 `409 last_credential`。密码登录关闭时也不能删除最后一把 SSH 公钥。`GET /api/v1/me` 和登录响应中的账号对象包含 `password_login_enabled` 与 `has_ssh_key`，分别表示当前策略和是否至少绑定一把公钥。该策略适用于网页/API 密码登录与 SSH 密码认证。
+
 ### 账号约定
 
 账号 ID 是稳定身份，用户名固定且区分大小写：新用户名只接受小写字母，3–20 位，允许数字、下划线和短横线，以字母开头。SSH 网关必须使用后端返回的账号 ID 标识玩家，不能使用客户端自报用户名或公钥指纹作为游戏账号 ID。

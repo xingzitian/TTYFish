@@ -28,10 +28,12 @@ type Store struct {
 
 // Account 是一个账号。账号 ID 和公钥是分开的：换钥匙不该丢账号。
 type Account struct {
-	ID        string
-	Handle    string
-	Display   string
-	CreatedAt time.Time
+	ID                   string
+	Handle               string
+	Display              string
+	CreatedAt            time.Time
+	PasswordLoginEnabled bool
+	HasSSHKey            bool
 }
 
 // Identity 是一把挂在账号下的公钥。
@@ -54,7 +56,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   id         TEXT PRIMARY KEY,
   handle     TEXT NOT NULL UNIQUE,
   display    TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  password_login_enabled INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS identities (
@@ -116,6 +119,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("升级公钥元数据: %w", err)
 	}
+	if err := migratePasswordLogin(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("升级密码登录设置: %w", err)
+	}
 	if err := migrateSessions(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("升级会话数据: %w", err)
@@ -152,7 +159,7 @@ func (s *Store) EnsureAccount(fp, publicKey, suggest string) (Account, error) {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(
-		`INSERT INTO accounts(id, handle, display, created_at) VALUES(?,?,?,?)`,
+		`INSERT INTO accounts(id, handle, display, created_at, password_login_enabled) VALUES(?,?,?,?,1)`,
 		id, handle, handle, now.UnixMilli(),
 	); err != nil {
 		return Account{}, err
@@ -167,7 +174,10 @@ func (s *Store) EnsureAccount(fp, publicKey, suggest string) (Account, error) {
 	if err := tx.Commit(); err != nil {
 		return Account{}, err
 	}
-	return Account{ID: id, Handle: handle, Display: handle, CreatedAt: now}, nil
+	return Account{
+		ID: id, Handle: handle, Display: handle, CreatedAt: now,
+		PasswordLoginEnabled: true, HasSSHKey: true,
+	}, nil
 }
 
 // ByFingerprint 按公钥指纹找账号。
@@ -175,10 +185,11 @@ func (s *Store) ByFingerprint(fp string) (Account, bool, error) {
 	var a Account
 	var created int64
 	err := s.db.QueryRow(
-		`SELECT a.id, a.handle, a.display, a.created_at
+		`SELECT a.id, a.handle, a.display, a.created_at, a.password_login_enabled,
+		        EXISTS(SELECT 1 FROM identities WHERE account_id=a.id)
 		   FROM accounts a JOIN identities i ON i.account_id = a.id
 		  WHERE i.fingerprint = ?`, fp,
-	).Scan(&a.ID, &a.Handle, &a.Display, &created)
+	).Scan(&a.ID, &a.Handle, &a.Display, &created, &a.PasswordLoginEnabled, &a.HasSSHKey)
 	if err == sql.ErrNoRows {
 		return Account{}, false, nil
 	}
@@ -194,8 +205,10 @@ func (s *Store) ByID(id string) (Account, bool, error) {
 	var a Account
 	var created int64
 	err := s.db.QueryRow(
-		`SELECT id, handle, display, created_at FROM accounts WHERE id = ?`, id,
-	).Scan(&a.ID, &a.Handle, &a.Display, &created)
+		`SELECT id, handle, display, created_at, password_login_enabled,
+		        EXISTS(SELECT 1 FROM identities WHERE account_id=accounts.id)
+		   FROM accounts WHERE id = ?`, id,
+	).Scan(&a.ID, &a.Handle, &a.Display, &created, &a.PasswordLoginEnabled, &a.HasSSHKey)
 	if err == sql.ErrNoRows {
 		return Account{}, false, nil
 	}

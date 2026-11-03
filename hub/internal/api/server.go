@@ -75,6 +75,7 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 	s.mux.HandleFunc("DELETE /api/v1/me/sessions/{id}", s.revokeSession)
 	s.mux.HandleFunc("POST /api/v1/me/sessions/revoke-others", s.revokeOtherSessions)
 	s.mux.HandleFunc("PUT /api/v1/me/password", s.setPassword)
+	s.mux.HandleFunc("PUT /api/v1/me/password-login", s.setPasswordLogin)
 	s.mux.HandleFunc("GET /api/v1/me/keys", s.keys)
 	s.mux.HandleFunc("POST /api/v1/me/keys", s.addKey)
 	s.mux.HandleFunc("DELETE /api/v1/me/keys/{fingerprint}", s.deleteKey)
@@ -312,6 +313,27 @@ func (s *Server) setPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(204)
 }
+func (s *Server) setPasswordLogin(w http.ResponseWriter, r *http.Request) {
+	a, ok := s.current(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Enabled == nil {
+		failure(w, 400, "invalid_request", "enabled 字段必填")
+		return
+	}
+	if err := s.accounts.SetPasswordLoginEnabled(a.ID, *body.Enabled); err != nil {
+		report(w, err)
+		return
+	}
+	w.WriteHeader(204)
+}
 func (s *Server) keys(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.current(w, r)
 	if !ok {
@@ -374,7 +396,7 @@ func report(w http.ResponseWriter, err error) {
 	case errors.Is(err, account.ErrNotFound):
 		failure(w, 404, "not_found", "资源不存在")
 	case errors.Is(err, account.ErrLastCredential):
-		failure(w, 409, "last_credential", "请先设置密码或添加其他公钥，再删除最后一把公钥")
+		failure(w, 409, "last_credential", "请先添加 SSH 公钥或启用密码登录，以保留登录方式")
 	case errors.Is(err, account.ErrChallengeInvalid):
 		failure(w, 409, "challenge_invalid", "确认码无效、已使用、已过期或与账号公钥不匹配")
 	case isPlayError(err):

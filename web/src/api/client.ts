@@ -121,6 +121,13 @@ export const api = {
     })
   },
 
+  setPasswordLoginEnabled(enabled: boolean) {
+    return request<void>('/api/v1/me/password-login', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    })
+  },
+
   listKeys() {
     return request<{ items: Key[] }>('/api/v1/me/keys')
   },

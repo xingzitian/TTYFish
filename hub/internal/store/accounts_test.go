@@ -25,6 +25,27 @@ func TestFixedAccountCredentials(t *testing.T) {
 	if got, ok := s.AuthenticatePassword("alice", "long-password-123"); !ok || got.ID != a.ID {
 		t.Fatal("password login failed")
 	}
+	if err := s.Link(a.ID, "fp-alice-2", "pub-alice-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPasswordLoginEnabled(a.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.AuthenticatePassword("alice", "long-password-123"); ok {
+		t.Fatal("password login remained enabled")
+	}
+	if _, err := s.RemoveIdentity(a.ID, "fp-alice-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RemoveIdentity(a.ID, "fp-alice"); err != ErrLastCredential {
+		t.Fatalf("removed last SSH key while password login was disabled: %v", err)
+	}
+	if err := s.SetPasswordLoginEnabled(a.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.AuthenticatePassword("alice", "long-password-123"); !ok {
+		t.Fatal("password login did not re-enable")
+	}
 	for _, name := range []string{"Alice", "other"} {
 		if _, ok := s.AuthenticatePassword(name, "long-password-123"); ok {
 			t.Fatal("wrong username accepted")
@@ -45,6 +66,12 @@ func TestFixedAccountCredentials(t *testing.T) {
 	b, err := s.Register("bob", "bob-password-123", "", "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if err := s.SetPasswordLoginEnabled(b.ID, false); err != ErrLastCredential {
+		t.Fatalf("disabled password login without an SSH key: %v", err)
+	}
+	if _, ok := s.AuthenticatePassword("bob", "bob-password-123"); !ok {
+		t.Fatal("failed toggle changed password login")
 	}
 	if err := s.Link(b.ID, "fp-alice", "pub"); err == nil {
 		t.Fatal("key transferred to another account")

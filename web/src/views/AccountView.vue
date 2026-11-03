@@ -21,6 +21,7 @@ const sessionsLoading = ref(false)
 const newPassword = ref('')
 const revokeOthers = ref(true)
 const savingPassword = ref(false)
+const savingPasswordLogin = ref(false)
 
 async function handleExpired(): Promise<void> {
   ElMessage.warning('登录已过期，请重新登录')
@@ -178,6 +179,38 @@ async function savePassword(): Promise<void> {
   }
 }
 
+async function setPasswordLoginEnabled(enabled: boolean): Promise<void> {
+  if (!enabled && keys.value.length === 0) {
+    ElMessage.warning('关闭前请先绑定 SSH 公钥')
+    return
+  }
+  if (!enabled) {
+    try {
+      await ElMessageBox.confirm(
+        '关闭后，这个账号只能通过已绑定的 SSH 公钥登录。密码不会删除。',
+        '关闭密码登录',
+        { type: 'warning', confirmButtonText: '关闭密码登录', cancelButtonText: '取消' },
+      )
+    } catch {
+      return
+    }
+  }
+  savingPasswordLogin.value = true
+  try {
+    await api.setPasswordLoginEnabled(enabled)
+    await auth.refresh()
+    ElMessage.success(enabled ? '密码登录已开启' : '密码登录已关闭')
+  } catch (err) {
+    if (err instanceof ApiError && err.code === 'last_credential') {
+      ElMessage.error('关闭密码登录前请先绑定 SSH 公钥')
+    } else {
+      fail(err, '设置失败')
+    }
+  } finally {
+    savingPasswordLogin.value = false
+  }
+}
+
 async function doLogout(): Promise<void> {
   await auth.logout()
   await router.push('/login')
@@ -223,6 +256,27 @@ onMounted(async () => {
       <p class="page-sub">
         账号 ID <span class="fp">{{ auth.state.account?.id }}</span>
       </p>
+
+      <el-card class="card" shadow="never">
+        <template #header>
+          <strong>密码登录</strong>
+        </template>
+        <p class="hint">
+          当前：{{ auth.state.account?.password_login_enabled ? '已开启' : '已关闭' }}。
+          关闭后只能通过已绑定的 SSH 公钥登录，密码凭证会保留。
+        </p>
+        <el-button
+          :type="auth.state.account?.password_login_enabled ? 'danger' : 'primary'"
+          :loading="savingPasswordLogin"
+          :disabled="!auth.state.account?.password_login_enabled && !keys.length"
+          @click="setPasswordLoginEnabled(!auth.state.account?.password_login_enabled)"
+        >
+          {{ auth.state.account?.password_login_enabled ? '关闭密码登录' : '开启密码登录' }}
+        </el-button>
+        <p v-if="auth.state.account?.password_login_enabled && !keys.length" class="hint">
+          请先添加 SSH 公钥，才能关闭密码登录。
+        </p>
+      </el-card>
 
       <el-card class="card" shadow="never">
         <template #header>

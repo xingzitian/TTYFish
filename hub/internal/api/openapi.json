@@ -2256,6 +2256,67 @@
         "description": "省略 revoke_other_sessions 时保持现有会话；true 时原子更新密码并撤销其他会话，保留当前会话。"
       }
     },
+    "/api/v1/me/password-login": {
+      "put": {
+        "operationId": "setPasswordLoginEnabled",
+        "summary": "启用或关闭当前账号的密码登录",
+        "description": "关闭只禁用密码认证，不删除密码凭证；账号必须至少绑定一把 SSH 公钥。SSH 密钥和 SSH 挑战登录不受影响。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "设置成功，无响应体"
+          },
+          "400": {
+            "description": "请求格式或字段错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未认证或凭证错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "关闭密码登录前必须先绑定 SSH 公钥",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/me/keys": {
       "get": {
         "operationId": "listKeys",
@@ -3814,13 +3875,23 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "password_login_enabled": {
+            "type": "boolean",
+            "description": "账号是否允许使用密码登录"
+          },
+          "has_ssh_key": {
+            "type": "boolean",
+            "description": "账号是否至少绑定一把 SSH 公钥"
           }
         },
         "required": [
           "id",
           "username",
           "display_name",
-          "created_at"
+          "created_at",
+          "password_login_enabled",
+          "has_ssh_key"
         ]
       },
       "Session": {

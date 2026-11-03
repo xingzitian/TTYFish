@@ -38,7 +38,7 @@ func New(st *store.Store, sshHint string) *Server {
 	}
 	s.mux.HandleFunc("/", s.handleIndex)
 	s.mux.HandleFunc("/auth/start", s.handleStart)
-	for _, path := range []string{"/register", "/auth/password", "/account/password", "/account/key"} {
+	for _, path := range []string{"/register", "/auth/password", "/account/password", "/account/key", "/account/password-login"} {
 		s.mux.HandleFunc(path, s.handleCredentials)
 	}
 	s.mux.HandleFunc("/auth/poll", s.handlePoll)
@@ -55,14 +55,16 @@ func (s *Server) Handler() http.Handler { return s.mux }
 // ---- 页面数据 ----
 
 type pageData struct {
-	Title   string
-	Handle  string
-	SSHHint string
-	Code    string
-	Poll    string
-	Error   string
-	Keys    []keyView
-	JustNow bool
+	Title                string
+	Handle               string
+	SSHHint              string
+	Code                 string
+	Poll                 string
+	Error                string
+	Keys                 []keyView
+	PasswordLoginEnabled bool
+	HasSSHKey            bool
+	JustNow              bool
 }
 
 type keyView struct {
@@ -180,10 +182,12 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	s.render(w, "account", pageData{
-		Title:   "我的账号",
-		Handle:  acc.Handle,
-		SSHHint: s.sshHint(acc.Handle),
-		Keys:    keys,
+		Title:                "我的账号",
+		Handle:               acc.Handle,
+		SSHHint:              s.sshHint(acc.Handle),
+		Keys:                 keys,
+		PasswordLoginEnabled: acc.PasswordLoginEnabled,
+		HasSSHKey:            acc.HasSSHKey,
 	})
 }
 

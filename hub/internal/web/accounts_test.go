@@ -63,6 +63,19 @@ func TestWebRegistrationAndCredentials(t *testing.T) {
 	if !ok || a.Handle != "alice" {
 		t.Fatal("key not linked")
 	}
+	if w = post("/account/password-login", url.Values{"enabled": {"false"}}, cookie); w.Code != 303 {
+		t.Fatal(w.Body.String())
+	}
+	if _, ok := st.AuthenticatePassword("alice", "replacement-password"); ok {
+		t.Fatal("legacy web password login ignored the disabled policy")
+	}
+	a, ok, _ = st.ByFingerprint(ssh.FingerprintSHA256(k))
+	if !ok || a.PasswordLoginEnabled || !a.HasSSHKey {
+		t.Fatal("password login setting was not saved")
+	}
+	if w = post("/auth/password", url.Values{"username": {"alice"}, "password": {"replacement-password"}}, nil); w.Code != 401 {
+		t.Fatal("disabled password login succeeded")
+	}
 	if w = post("/auth/start", url.Values{"username": {"alice"}}, nil); w.Code != 200 || !strings.Contains(w.Body.String(), "alice@127.0.0.1") {
 		t.Fatal("incorrect SSH command", w.Body.String())
 	}
@@ -73,7 +86,7 @@ func TestWebRegistrationAndCredentials(t *testing.T) {
 
 func TestCredentialMutationsRejectCrossOrigin(t *testing.T) {
 	s, _ := newTestServer(t)
-	for _, path := range []string{"/register", "/auth/password", "/account/password", "/account/key"} {
+	for _, path := range []string{"/register", "/auth/password", "/account/password", "/account/key", "/account/password-login"} {
 		r := httptest.NewRequest("POST", path, nil)
 		r.Header.Set("Origin", "https://evil.example")
 		w := httptest.NewRecorder()

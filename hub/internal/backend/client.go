@@ -19,10 +19,12 @@ import (
 
 // Account 是后端返回的账号信息。
 type Account struct {
-	ID          string `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	CreatedAt   string `json:"created_at"`
+	ID                   string `json:"id"`
+	Username             string `json:"username"`
+	DisplayName          string `json:"display_name"`
+	CreatedAt            string `json:"created_at"`
+	PasswordLoginEnabled bool   `json:"password_login_enabled"`
+	HasSSHKey            bool   `json:"has_ssh_key"`
 }
 
 // Player 是一次成功认证的结果：用 Token 代表这个玩家访问房间接口。
@@ -99,6 +101,17 @@ func (c *Client) LoginPassword(ctx context.Context, username, password string, c
 	return c.playerCall(ctx, "/api/v1/auth/password", body, false, clients...)
 }
 
+func (c *Client) SetPasswordLoginEnabled(ctx context.Context, token string, enabled bool) error {
+	status, raw, err := c.doAuthorized(ctx, http.MethodPut, "/api/v1/me/password-login", map[string]bool{"enabled": enabled}, token)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusNoContent {
+		return apiError(status, raw)
+	}
+	return nil
+}
+
 // ConfirmChallenge 确认网页登录用的一次性码。
 func (c *Client) ConfirmChallenge(ctx context.Context, username, publicKey, code string, clients ...string) error {
 	body := map[string]string{
@@ -135,6 +148,21 @@ func (c *Client) playerCall(ctx context.Context, path string, body map[string]st
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, gateway bool, clients ...string) (int, []byte, error) {
+	authorization := ""
+	if gateway {
+		if c.gatewayToken == "" {
+			return 0, nil, fmt.Errorf("没有配置网关凭证")
+		}
+		authorization = c.gatewayToken
+	}
+	status, raw, err := c.doAuthorized(ctx, method, path, body, authorization, clients...)
+	if err != nil {
+		return status, raw, err
+	}
+	return status, raw, nil
+}
+
+func (c *Client) doAuthorized(ctx context.Context, method, path string, body any, authorization string, clients ...string) (int, []byte, error) {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -163,11 +191,8 @@ func (c *Client) do(ctx context.Context, method, path string, body any, gateway 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if gateway {
-		if c.gatewayToken == "" {
-			return 0, nil, fmt.Errorf("没有配置网关凭证")
-		}
-		req.Header.Set("Authorization", "Bearer "+c.gatewayToken)
+	if authorization != "" {
+		req.Header.Set("Authorization", "Bearer "+authorization)
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {

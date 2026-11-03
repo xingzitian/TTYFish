@@ -139,6 +139,22 @@ const templates = `
   <p class="muted" style="margin-top:14px">
     登录游戏时必须使用当前用户名 @{{.Handle}}；密钥和密码登录会进入同一个游戏账号。
   </p>
+  <div style="margin:18px 0">
+    <b>密码登录：{{if .PasswordLoginEnabled}}已开启{{else}}已关闭{{end}}</b>
+    <p class="muted">关闭后只能通过已绑定的 SSH 公钥登录，密码凭证不会删除。</p>
+    <form method="post" action="/account/password-login">
+      {{if .PasswordLoginEnabled}}
+      <input type="hidden" name="enabled" value="false">
+      <button class="ghost" type="submit" {{if not .HasSSHKey}}disabled{{end}}>关闭密码登录</button>
+      {{else}}
+      <input type="hidden" name="enabled" value="true">
+      <button class="ghost" type="submit">开启密码登录</button>
+      {{end}}
+    </form>
+    {{if and .PasswordLoginEnabled (not .HasSSHKey)}}
+    <p class="muted">请先添加 SSH 公钥，才能关闭密码登录。</p>
+    {{end}}
+  </div>
   <form method="post" action="/account/key">
     <p><label>添加 SSH 公钥<br><textarea name="public_key" required rows="3" style="width:100%"></textarea></label></p>
     <button type="submit">保存公钥</button>

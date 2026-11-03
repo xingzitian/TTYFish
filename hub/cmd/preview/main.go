@@ -99,7 +99,9 @@ func main() {
 	root := gateway.New(gateway.Deps{
 		Registry: entries,
 		// 预览时玩家 ID / 令牌都是假的，只用于显示
-		Player: backend.Player{Account: backend.Account{ID: "preview", Username: *name}},
+		Player: backend.Player{Account: backend.Account{
+			ID: "preview", Username: *name, PasswordLoginEnabled: true,
+		}},
 		Output: os.Stdout,
 		Term:   term,
 		Mode:   mode,

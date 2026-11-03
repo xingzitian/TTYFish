@@ -2,6 +2,9 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -145,19 +148,75 @@ func TestSettingsTogglesLayout(t *testing.T) {
 	}
 }
 
-// TestSettingsPlaceholders 没有后端支持的项要标成不可用。
-func TestSettingsPlaceholders(t *testing.T) {
-	r, _ := newRoot(t)
+func TestSettingsTogglesPasswordLogin(t *testing.T) {
+	requested := false
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/me/password-login" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer player-token" {
+			t.Error("player token was not sent")
+		}
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		called = true
+		requested = body.Enabled
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	reg := registry.New()
+	if err := reg.Register(registry.Entry{
+		ID: "uno", Game: stubGame{},
+		NewUI: func(registry.UIContext) registry.Model { return nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := New(Deps{
+		Accounts: backend.New(server.URL, ""),
+		Registry: reg,
+		Player: backend.Player{
+			Token: "player-token",
+			Account: backend.Account{
+				ID: "acc-1", Username: "sakitami", PasswordLoginEnabled: true, HasSSHKey: true,
+			},
+		},
+		Output: &bytes.Buffer{},
+		Mode:   ui.ColorNone,
+	})
 	r.Init()
+	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("=")})
+	pressEnter(r)
 	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("=")})
 	pressEnter(r)
 
 	view := strip(r.View())
-	if !strings.Contains(view, "密码登录") {
-		t.Fatalf("设置里应该有密码登录那一项：\n%s", view)
+	if !called || requested || r.deps.Player.Account.PasswordLoginEnabled {
+		t.Fatalf("should disable password login via backend: requested=%t account=%+v", requested, r.deps.Player.Account)
 	}
-	if !strings.Contains(view, "暂不可用") {
-		t.Fatalf("密码登录目前没有接口，要标成占位：\n%s", view)
+	if !strings.Contains(view, "密码登录：关闭") || !strings.Contains(view, "密码登录已关闭") {
+		t.Fatalf("setting state and result should be shown:\n%s", view)
+	}
+}
+
+func TestSettingsCannotDisableWithoutSSHKey(t *testing.T) {
+	r, _ := newRoot(t)
+	r.deps.Player.Account.PasswordLoginEnabled = true
+	r.deps.Player.Account.HasSSHKey = false
+	r.deps.Player.Token = "player-token"
+	r.deps.Accounts = backend.New("http://127.0.0.1:1", "")
+	r.Init()
+	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("=")})
+	pressEnter(r)
+	if r.menu.Items()[1].Enabled {
+		t.Fatal("password login should not be disabled without an SSH key")
+	}
+	if view := strip(r.View()); !strings.Contains(view, "需先绑定 SSH 公钥") {
+		t.Fatalf("settings should explain the key requirement:\n%s", view)
 	}
 }
 

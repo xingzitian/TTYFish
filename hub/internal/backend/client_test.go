@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -66,5 +67,28 @@ func TestRateLimitErrorIncludesRetryAfter(t *testing.T) {
 	var limited *RateLimitError
 	if !errors.As(err, &limited) || limited.RetryAfterSeconds != 17 || !strings.Contains(err.Error(), "17") {
 		t.Fatalf("waiting time lost: %v", err)
+	}
+}
+
+func TestSetPasswordLoginEnabledUsesPlayerToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/v1/me/password-login" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer player-token" {
+			t.Error("player token was not sent")
+		}
+		var body map[string]bool
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["enabled"] {
+			t.Error("request should disable password login")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	if err := New(server.URL, "").SetPasswordLoginEnabled(context.Background(), "player-token", false); err != nil {
+		t.Fatal(err)
 	}
 }

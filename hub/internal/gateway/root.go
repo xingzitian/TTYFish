@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -89,10 +90,11 @@ type Root struct {
 
 	deps Deps
 
-	level   level
-	menu    *menu.Model
-	join    textinput.Model
-	joinErr string
+	level           level
+	menu            *menu.Model
+	join            textinput.Model
+	joinErr         string
+	settingsMessage string
 
 	game registry.Model
 	conn *remote.Client
@@ -176,6 +178,9 @@ func (r *Root) newGameUI(entry registry.Entry, client_ client.Client) registry.M
 
 // gotoLevel 切换屏幕并重建对应的条目。
 func (r *Root) gotoLevel(l level) {
+	if l != levelSettings {
+		r.settingsMessage = ""
+	}
 	r.level = l
 	r.menu.SetSize(r.width, r.height)
 	// 每个菜单都从第一项开始，别把上一屏的光标带过来
@@ -209,10 +214,22 @@ func (r *Root) gotoLevel(l level) {
 		if r.layout() == sdkui.LayoutCompact {
 			layout = "极简"
 		}
+		passwordLogin := r.deps.Player.Account.PasswordLoginEnabled
+		passwordLabel := "关闭"
+		if passwordLogin {
+			passwordLabel = "开启"
+		}
+		canTogglePasswordLogin := r.deps.Accounts != nil && r.deps.Player.Token != ""
+		passwordHint := ""
+		if !canTogglePasswordLogin {
+			passwordHint = "（不可用）"
+		} else if passwordLogin && !r.deps.Player.Account.HasSSHKey {
+			canTogglePasswordLogin = false
+			passwordHint = "（需先绑定 SSH 公钥）"
+		}
 		r.menu.SetItems([]menu.Item{
 			{Label: "显示效果：" + layout, Enabled: true},
-			// 后端还没有"账号是否设了密码"的字段，先占位
-			{Label: "密码登录：—", Enabled: false},
+			{Label: "密码登录：" + passwordLabel, Hint: passwordHint, Enabled: canTogglePasswordLogin},
 			{Label: "进入 Web 设置", Enabled: true},
 		})
 	case levelJoin:
@@ -438,6 +455,22 @@ func (r *Root) pick(idx int) tea.Cmd {
 				r.deps.SetLayout(r.prefKey(), next)
 			}
 			r.gotoLevel(levelSettings) // 重画，让标签跟着变
+		case 1:
+			enabled := !r.deps.Player.Account.PasswordLoginEnabled
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			err := r.deps.Accounts.SetPasswordLoginEnabled(ctx, r.deps.Player.Token, enabled)
+			cancel()
+			if err != nil {
+				r.settingsMessage = "密码登录设置失败：" + err.Error()
+				r.gotoLevel(levelSettings)
+				return nil
+			}
+			r.deps.Player.Account.PasswordLoginEnabled = enabled
+			r.settingsMessage = "密码登录已关闭"
+			if enabled {
+				r.settingsMessage = "密码登录已开启"
+			}
+			r.gotoLevel(levelSettings)
 		case 2:
 			if r.deps.WebURL == "" {
 				fmt.Fprint(r.deps.Output, "\r\n网页地址还没配置（网关启动参数 -web-url）\r\n")
@@ -557,6 +590,9 @@ func (r *Root) joinView() string {
 }
 
 func (r *Root) cmdLine() string {
+	if r.level == levelSettings && r.settingsMessage != "" {
+		return "[MSG] " + r.settingsMessage
+	}
 	hint := "[CMD] -=切换 Enter选择 Esc 返回"
 	if r.level == levelHome {
 		hint = "[CMD] -=切换 Enter选择 Esc 退出"

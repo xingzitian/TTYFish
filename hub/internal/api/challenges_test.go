@@ -14,6 +14,9 @@ func TestSSHChallengeBrowserGatewayFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := f.service.SetPasswordLoginEnabled(a.ID, false); err != nil {
+		t.Fatal(err)
+	}
 	c := read[account.Challenge](t, f.request("POST", "/api/v1/auth/ssh/challenges", "", map[string]string{"username": "alice"}, 201))
 	if c.Username != "alice" || c.Code == "" || len(c.PollToken) != 64 || c.ExpiresIn != 90 || c.PollIntervalMS != 1500 {
 		t.Fatalf("incorrect challenge: %+v", c)

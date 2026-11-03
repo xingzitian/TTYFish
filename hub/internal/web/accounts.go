@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/xingzitian/TTYFish/hub/internal/account"
+	"github.com/xingzitian/TTYFish/hub/internal/store"
 )
 
 func publicKey(text string) (string, string, error) {
@@ -64,16 +65,17 @@ func (s *Server) handleCredentials(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.setCookie(w, token)
-	case "/account/password", "/account/key":
+	case "/account/password", "/account/key", "/account/password-login":
 		a, ok := s.current(r)
 		if !ok {
 			http.Error(w, "请先登录", 401)
 			return
 		}
 		var err error
-		if r.URL.Path == "/account/password" {
+		switch r.URL.Path {
+		case "/account/password":
 			err = s.store.SetPassword(a.ID, r.FormValue("password"))
-		} else {
+		case "/account/key":
 			var fp, pub string
 			fp, pub, err = publicKey(r.FormValue("public_key"))
 			if err == nil && fp == "" {
@@ -82,8 +84,19 @@ func (s *Server) handleCredentials(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				err = s.store.Link(a.ID, fp, pub)
 			}
+		case "/account/password-login":
+			enabled := r.FormValue("enabled")
+			if enabled != "true" && enabled != "false" {
+				err = fmt.Errorf("密码登录设置无效")
+			} else {
+				err = s.store.SetPasswordLoginEnabled(a.ID, enabled == "true")
+			}
 		}
 		if err != nil {
+			if err == store.ErrLastCredential {
+				http.Error(w, "关闭密码登录前请先绑定 SSH 公钥", http.StatusConflict)
+				return
+			}
 			http.Error(w, err.Error(), 400)
 			return
 		}
