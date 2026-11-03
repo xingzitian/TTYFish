@@ -46,6 +46,7 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 | 方法 | 路径 | 认证 | 用途 |
 |---|---|---|---|
 | GET | `/api/v1/version` | 无 | 查询当前服务器版本 |
+| GET | `/api/v1/me/points` | 玩家 Bearer 会话 | 查询自己的 PT 余额 |
 | POST | `/api/v1/accounts` | 无 | 注册，返回账号，不自动创建登录会话 |
 | POST | `/api/v1/auth/password` | 无 | 用户名和密码登录 |
 | GET | `/api/v1/me` | 玩家 Bearer | 当前账号 |
@@ -63,6 +64,24 @@ go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins http://lo
 | POST | `/api/v1/auth/ssh/challenges` | 无 | 为固定用户名生成网页登录挑战 |
 | POST | `/api/v1/internal/auth/ssh/challenges/confirm` | 网关 Bearer | 验证 SSH 私钥后确认挑战 |
 | POST | `/api/v1/auth/ssh/challenges/poll` | 浏览器 poll_token | 查询状态并一次性领取会话 |
+
+### PT 积分与 UNO 奖励
+
+`GET /api/v1/me/points` 使用已有玩家 Bearer 会话，不接受其他账号 ID。成功返回 `200 OK`：
+
+```json
+{"balance_tenths":68,"balance_pt":"6.8"}
+```
+
+`balance_tenths` 是非负 int64 整数，以 **0.1 PT** 为单位；`balance_pt` 是精确到一位小数的字符串，适合直接展示，避免客户端浮点计算。未获奖励的新旧账号都返回 `{"balance_tenths":0,"balance_pt":"0.0"}`。会话缺失、无效、过期或撤销返回 `401 invalid_credentials`，读取失败返回 `500 internal_error`，不会用零余额掩盖数据库错误。接口仅供查询，不提供充值、转账或任意修改余额能力。
+
+UNO 保留现有规则分数：赢家获得其他玩家剩余手牌的分值总和，**游戏分数 : PT = 10 : 1**，因此赢得 68 分增加 6.8 PT，1 分增加 0.1 PT，不取整、不使用浮点数。默认单局在该局结束时奖励；多局长赛只在达到目标分、整场结束时奖励最终赢家，使用该赢家整场累计分数（不是只取最后一局，也不是目标分封顶）。其他玩家余额和规则分数不变。原生机器人没有账号，不奖励；玩家断线后由机器人托管仍归属原账号。
+
+数据库打开时沿用 `CREATE TABLE IF NOT EXISTS` 模式增加 `pt_balances` 和 `uno_pt_rewards`，无需手动迁移旧账号。每次新比赛生成随机独立 ID，长赛各小局共享该 ID，重开则生成新 ID。入账在同一 SQLite 事务中记录唯一比赛结果并累加整数余额；相同结果重复处理或服务重启后再次处理不会重复奖励，账号或分数不匹配的重复结果会报错。余额溢出或写入失败会回滚整个事务，不会只留下奖励记录。
+
+真人动作、机器人/断线托管、回合超时及限时义务都经过相同最终结算入口。写入失败时记录服务端错误并在房间通知中提示，后台重试同一结果，即使所有玩家离线也继续重试；期间禁止重开投票、开始新比赛和回收该房间，防止覆盖待入账结果。
+
+已提交的余额及奖励去重记录持久保存在 SQLite 中。**比赛状态本身仍只在内存中**：强制重启/崩溃会丢失未结束的比赛，以及因数据库持续不可用而尚未成功提交的结果；关闭房间时会再尝试一次并记录仍未入账的错误。此功能不提供历史比赛回放、跨进程房间恢复或补发工具。
 
 ### 服务器版本
 

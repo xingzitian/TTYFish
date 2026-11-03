@@ -29,9 +29,10 @@ type Codec interface {
 	EncodeView(any) (any, error)
 }
 type Game struct {
-	ID    string
-	Rules game.Game
-	Codec Codec
+	ID     string
+	Rules  game.Game
+	Codec  Codec
+	Settle func(room.MatchResult) error
 }
 type GameInfo struct {
 	ID              string `json:"id"`
@@ -71,7 +72,11 @@ func New(games []Game, opts room.Options) (*Service, error) {
 			s.Close()
 			return nil, errors.New("游戏 ID 重复")
 		}
-		s.games[g.ID] = &registered{g, room.NewRegistry(g.Rules, opts)}
+		gameOpts := opts
+		if g.Settle != nil {
+			gameOpts.OnMatchEnd = g.Settle
+		}
+		s.games[g.ID] = &registered{g, room.NewRegistry(g.Rules, gameOpts)}
 	}
 	return s, nil
 }

@@ -56,9 +56,17 @@ type Options struct {
 	Grace       time.Duration // 掉线后多久算"彻底托管"
 	BotLag      time.Duration // 电脑每步思考多久
 	Now         func() time.Time
+	// OnMatchEnd runs under the room lock; it must not call back into the room.
+	OnMatchEnd func(MatchResult) error
 
 	// NoLoop 关掉后台时钟，测试里手动调 tick() 用。
 	NoLoop bool
+}
+
+type MatchResult struct {
+	ID       string
+	Identity string
+	Score    int64
 }
 
 // DefaultOptions 是默认时序。60 秒掉线宽限是"去倒杯水还能回来"的量级；
@@ -113,28 +121,31 @@ type Room struct {
 	Code string
 	Game game.Game
 
-	mu          sync.Mutex
-	opts        Options
-	phase       Phase
-	state       any
-	seats       []*seat
-	byFP        map[string]*seat
-	subs        map[*seat]chan Snapshot
-	turnAt      time.Time
-	lastActive  time.Time
-	abandonedAt time.Time
-	startedAt   time.Time
-	timeline    []TimelineEntry
-	logSeq      int
-	pendingID   string
-	pendingEnd  time.Time
-	pendingAct  any
-	vote        *voteState
-	notice      string
-	noticeAt    time.Time
-	closed      bool
-	revision    uint64
-	stop        chan struct{}
+	mu                sync.Mutex
+	opts              Options
+	phase             Phase
+	state             any
+	matchID           string
+	settled           bool
+	settlementPending bool
+	seats             []*seat
+	byFP              map[string]*seat
+	subs              map[*seat]chan Snapshot
+	turnAt            time.Time
+	lastActive        time.Time
+	abandonedAt       time.Time
+	startedAt         time.Time
+	timeline          []TimelineEntry
+	logSeq            int
+	pendingID         string
+	pendingEnd        time.Time
+	pendingAct        any
+	vote              *voteState
+	notice            string
+	noticeAt          time.Time
+	closed            bool
+	revision          uint64
+	stop              chan struct{}
 }
 
 // New 建一间空房。
@@ -333,6 +344,9 @@ func (r *Room) startLocked() {
 		seeds = append(seeds, game.PlayerSeed{Seat: s.seat, Name: s.name, Bot: s.bot})
 	}
 	r.state = r.Game.NewMatch(seeds, seed)
+	r.matchID = rand.Text()
+	r.settled = false
+	r.settlementPending = false
 	r.phase = Playing
 	r.turnAt = r.opts.Now()
 	r.startedAt = r.turnAt
@@ -480,6 +494,9 @@ func (r *Room) VoteRestart(fp string, agree bool) error {
 	if !ok {
 		return ErrNotIn
 	}
+	if r.settlementPending {
+		return fmt.Errorf("比赛奖励尚未入账，请稍后重试")
+	}
 	if r.phase != Playing && r.phase != Over {
 		return ErrPhase
 	}
@@ -600,6 +617,12 @@ func (r *Room) Close() {
 		r.mu.Unlock()
 		return
 	}
+	if r.settlementPending {
+		r.afterStateLocked()
+		if r.settlementPending {
+			slog.Error("关闭房间时比赛奖励仍未入账", "room", r.Code, "match", r.matchID)
+		}
+	}
 	r.closed = true
 	close(r.stop)
 	for s, ch := range r.subs {
@@ -633,6 +656,12 @@ func (r *Room) tick() {
 		return
 	}
 	now := r.opts.Now()
+
+	if r.settlementPending {
+		r.afterStateLocked()
+		r.broadcastLocked()
+		return
+	}
 
 	// 通知只显示几秒。
 	if r.notice != "" && now.Sub(r.noticeAt) > 4*time.Second {
@@ -672,6 +701,7 @@ func (r *Room) tick() {
 		act := r.pendingAct
 		if err := r.Game.Apply(r.state, act); err == nil {
 			r.clearPendingLocked()
+			r.afterStateLocked()
 			r.absorbLogLocked()
 			changed = true
 		}
@@ -736,6 +766,31 @@ func (r *Room) timeoutStepLocked(seat int) bool {
 func (r *Room) afterStateLocked() {
 	if r.Game.Phase(r.state) == game.Playing {
 		return
+	}
+	final := r.Game.Phase(r.state) == game.MatchOver || r.Game.MatchTarget() == 0
+	if final && !r.settled && r.opts.OnMatchEnd != nil {
+		winner := r.Game.MatchWinner(r.state)
+		if r.Game.MatchTarget() == 0 {
+			winner = r.Game.RoundWinner(r.state)
+		}
+		scores := r.Game.Scores(r.state)
+		var err error
+		if winner < 0 || winner >= len(r.seats) || winner >= len(scores) || scores[winner] < 0 {
+			err = errors.New("invalid final match result")
+		} else {
+			err = r.opts.OnMatchEnd(MatchResult{r.matchID, r.seats[winner].fp, int64(scores[winner])})
+		}
+		if err != nil {
+			if !r.settlementPending {
+				slog.Error("比赛奖励入账失败，将重试", "room", r.Code, "match", r.matchID, "err", err)
+			}
+			r.settlementPending = true
+			r.vote = nil
+			r.setNotice("比赛奖励入账失败，正在重试")
+			return
+		}
+		r.settled = true
+		r.settlementPending = false
 	}
 	r.phase = Over
 	r.vote = nil
@@ -838,6 +893,9 @@ func (r *Room) broadcastLocked() {
 func (r *Room) Abandoned(ttl time.Duration) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.settlementPending {
+		return false
+	}
 	for _, player := range r.seats {
 		if player.fp != "" && player.connected {
 			return false

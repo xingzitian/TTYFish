@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "TTYFish 账号认证 API",
-    "version": "1.5.0",
+    "version": "1.6.0",
     "description": "核心后端的账号、房间和游戏 API。使用玩家 Bearer 会话和独立网关凭证。认证按来源、账号、认证网关及操作类型分层限流；默认窗口 60 秒。429 响应通过 Retry-After 返回实际剩余等待秒数。可信代理默认关闭。"
   },
   "servers": [
@@ -16,6 +16,56 @@
     }
   ],
   "paths": {
+    "/api/v1/me/points": {
+      "get": {
+        "operationId": "getMyPoints",
+        "summary": "查询当前账号 PT 余额",
+        "description": "使用玩家 Bearer 会话，仅返回自己的余额。balance_tenths 是整数十分位，10 表示 1 PT；balance_pt 是精确的一位小数字符串，避免客户端浮点计算。新旧账号初始余额均为零。UNO 最终赢家按整场累计游戏分数 10:1 入账，原生机器人不入账，不提供客户端修改余额接口。",
+        "responses": {
+          "200": {
+            "description": "当前账号的持久化 PT 余额",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["balance_tenths", "balance_pt"],
+                  "properties": {
+                    "balance_tenths": {
+                      "type": "integer",
+                      "format": "int64",
+                      "minimum": 0,
+                      "example": 68
+                    },
+                    "balance_pt": {
+                      "type": "string",
+                      "pattern": "^[0-9]+\\.[0-9]$",
+                      "example": "6.8"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_credentials：玩家会话缺失、无效、过期或已撤销",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Error"}
+              }
+            }
+          },
+          "500": {
+            "description": "internal_error：无法读取余额，不返回假零余额",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/Error"}
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/version": {
       "get": {
         "operationId": "getServerVersion",

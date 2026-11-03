@@ -255,8 +255,21 @@ func TestOpenAPIContractIsServed(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 29 {
+	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 30 {
 		t.Fatalf("unexpected contract: %s, %d paths", spec.OpenAPI, len(spec.Paths))
+	}
+	var points struct {
+		Get *struct {
+			Responses map[string]json.RawMessage `json:"responses"`
+			Security  *[]json.RawMessage         `json:"security"`
+		} `json:"get"`
+	}
+	if err := json.Unmarshal(spec.Paths["/api/v1/me/points"], &points); err != nil {
+		t.Fatal(err)
+	}
+	if points.Get == nil || points.Get.Security != nil ||
+		points.Get.Responses["200"] == nil || points.Get.Responses["401"] == nil || points.Get.Responses["500"] == nil {
+		t.Fatal("points must document authenticated GET and balance/error responses")
 	}
 	var version struct {
 		Get *struct {

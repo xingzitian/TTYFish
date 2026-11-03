@@ -27,6 +27,7 @@ const SessionTTL = 24 * time.Hour
 
 // Repository is the persistence boundary; gateways never access it directly.
 type Repository interface {
+	PTTenths(string) (int64, error)
 	Register(string, string, string, string) (store.Account, error)
 	RegisterNamed(string, string, string, string, string) (store.Account, error)
 	LinkNamed(string, string, string, *string) error
@@ -57,6 +58,19 @@ type Repository interface {
 type Service struct{ repo Repository }
 
 func New(repo Repository) *Service { return &Service{repo: repo} }
+
+type Points struct {
+	BalanceTenths int64  `json:"balance_tenths"`
+	BalancePT     string `json:"balance_pt"`
+}
+
+func (s *Service) Points(accountID string) (Points, error) {
+	tenths, err := s.repo.PTTenths(accountID)
+	if err != nil {
+		return Points{}, err
+	}
+	return Points{tenths, fmt.Sprintf("%d.%d", tenths/10, tenths%10)}, nil
+}
 
 type Account struct {
 	ID                   string    `json:"id"`

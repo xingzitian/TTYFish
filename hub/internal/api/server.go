@@ -70,6 +70,7 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/v1/auth/ssh/challenges/poll", s.pollSSHChallenge)
 	s.mux.HandleFunc("POST /api/v1/internal/auth/ssh/challenges/confirm", s.confirmSSHChallenge)
 	s.mux.HandleFunc("GET /api/v1/me", s.me)
+	s.mux.HandleFunc("GET /api/v1/me/points", s.points)
 	s.mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
 	s.mux.HandleFunc("GET /api/v1/me/sessions", s.sessions)
 	s.mux.HandleFunc("DELETE /api/v1/me/sessions/{id}", s.revokeSession)
@@ -190,6 +191,19 @@ func (s *Server) current(w http.ResponseWriter, r *http.Request) (account.Accoun
 		return account.Account{}, false
 	}
 	return a, true
+}
+
+func (s *Server) points(w http.ResponseWriter, r *http.Request) {
+	a, ok := s.current(w, r)
+	if !ok {
+		return
+	}
+	points, err := s.accounts.Points(a.ID)
+	if err != nil {
+		report(w, err)
+		return
+	}
+	respond(w, http.StatusOK, points)
 }
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if !s.aggregate(w, r, false, "register", s.rates.RegistrationIP) {
