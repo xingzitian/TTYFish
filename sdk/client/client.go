@@ -58,21 +58,28 @@ type TimelineEntry struct {
 // 游戏的界面负责把它断言回自己的类型。
 type Snapshot struct {
 	Revision uint64
-	Code     string
-	Phase    Phase
-	Players  []Player
-	MySeat   int
-	MaxSeats int
-	IsHost   bool
-	View     any
-	Timeline []TimelineEntry
-	Vote     *Vote
-	Notice   string
+	// SettlementRevision increases only after a final match settlement succeeds.
+	// It survives new matches so clients can detect settlements across dropped frames.
+	SettlementRevision uint64
+	Code               string
+	Phase              Phase
+	Players            []Player
+	MySeat             int
+	MaxSeats           int
+	IsHost             bool
+	View               any
+	Timeline           []TimelineEntry
+	Vote               *Vote
+	Notice             string
 	// PendingLeftMS 是"限时义务还剩多少毫秒"，0 表示当前没有。
 	PendingLeftMS int64
 	// Kicked 表示这一帧是"你在别处登录，这个连接被顶掉了"，发完就关通道。
 	Kicked bool
 }
+
+// SnapshotMsg carries a room update through the UI event loop.
+// Game UIs should use it for Updates so the gateway can observe settlement changes.
+type SnapshotMsg Snapshot
 
 // Presets 是预设快捷语。不做自由输入，避免控制字符注入。
 var Presets = []string{

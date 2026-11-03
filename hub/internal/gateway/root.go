@@ -96,7 +96,9 @@ type Root struct {
 	joinErr         string
 	settingsMessage string
 	// balancePT 是标题栏显示的 PT 余额；空表示还没查到（显示 —pt）。
-	balancePT string
+	balancePT          string
+	pointsQuery        uint64
+	settlementRevision uint64
 
 	game registry.Model
 	conn *remote.Client
@@ -153,8 +155,9 @@ func (r *Root) Init() tea.Cmd {
 
 // pointsMsg 是异步查回来的余额。
 type pointsMsg struct {
-	pt  string
-	err error
+	pt    string
+	err   error
+	query uint64
 }
 
 // refreshPoints 发一个查余额的命令；拿不到令牌时返回 nil（预览模式）。
@@ -164,14 +167,16 @@ func (r *Root) refreshPoints() tea.Cmd {
 	}
 	accounts := r.deps.Accounts
 	token := r.deps.Player.Token
+	r.pointsQuery++
+	query := r.pointsQuery
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		p, err := accounts.PlayerPoints(ctx, token)
 		if err != nil {
-			return pointsMsg{err: err}
+			return pointsMsg{err: err, query: query}
 		}
-		return pointsMsg{pt: p.BalancePT}
+		return pointsMsg{pt: p.BalancePT, query: query}
 	}
 }
 
@@ -192,6 +197,8 @@ func (r *Root) resume() bool {
 		return false
 	}
 	r.conn, r.gameID = conn, entry.ID
+	r.roomClient = conn
+	r.settlementRevision = conn.Snapshot().SettlementRevision
 	r.game = r.newGameUI(entry, conn)
 	r.level = levelTable
 	slog.Info("恢复房间", "account", r.deps.Player.Account.ID, "game", entry.ID)
@@ -279,6 +286,18 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		r.menu.SetSize(r.width, r.height)
 	}
 
+	if p, ok := msg.(pointsMsg); ok {
+		if p.query != r.pointsQuery {
+			return r, nil
+		}
+		if p.err == nil {
+			r.balancePT = p.pt
+		} else {
+			slog.Warn("查询 PT 余额失败", "err", p.err)
+		}
+		return r, nil
+	}
+
 	// 牌桌上时把消息交给游戏界面；高度留一行给标题栏。
 	if r.level == levelTable && r.game != nil {
 		// Esc / q 在牌桌上是"退出房间、回上一级"，不是断线。
@@ -318,6 +337,10 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m, ok := next.(registry.Model); ok {
 			r.game = m
 		}
+		if snap, ok := msg.(client.SnapshotMsg); ok && snap.SettlementRevision > r.settlementRevision {
+			r.settlementRevision = snap.SettlementRevision
+			cmd = tea.Batch(cmd, r.refreshPoints())
+		}
 		// 玩家在游戏里离开房间（客户端不再有房间码）→ 回到游戏菜单
 		if r.conn != nil && r.conn.Code() == "" {
 			r.game = nil
@@ -325,15 +348,6 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r.gotoLevel(levelGame)
 		}
 		return r, cmd
-	}
-
-	if p, ok := msg.(pointsMsg); ok {
-		if p.err == nil {
-			r.balancePT = p.pt
-		} else {
-			slog.Warn("查询 PT 余额失败", "err", p.err)
-		}
-		return r, nil
 	}
 
 	if key, ok := msg.(tea.KeyMsg); ok {
@@ -579,6 +593,7 @@ func (r *Root) openRoom(code string) tea.Cmd {
 		return nil
 	}
 	r.game = r.newGameUI(entry, c)
+	r.settlementRevision = c.Snapshot().SettlementRevision
 	r.level = levelTable
 	slog.Info("进入房间", "account", r.deps.Player.Account.ID, "game", entry.ID, "code", code)
 	return r.game.Init()

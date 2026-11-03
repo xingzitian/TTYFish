@@ -38,7 +38,7 @@ type Options struct {
 	SetLayout func(key string, l ui.Layout)
 }
 
-type snapMsg client.Snapshot
+type snapMsg = client.SnapshotMsg
 type closedMsg struct{}
 
 // Model 是纯客户端：它不持有牌局状态，只渲染服务端推来的快照，

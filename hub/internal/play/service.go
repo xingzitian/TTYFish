@@ -93,21 +93,22 @@ func (s *Service) Games() []GameInfo {
 }
 
 type Snapshot struct {
-	ProtocolVersion int                    `json:"protocol_version"`
-	GameID          string                 `json:"game_id"`
-	Code            string                 `json:"code"`
-	Revision        uint64                 `json:"revision"`
-	Phase           string                 `json:"phase"`
-	Players         []client.Player        `json:"players"`
-	MySeat          int                    `json:"my_seat"`
-	MaxSeats        int                    `json:"max_seats"`
-	IsHost          bool                   `json:"is_host"`
-	View            any                    `json:"view"`
-	Timeline        []client.TimelineEntry `json:"timeline"`
-	Vote            *client.Vote           `json:"vote"`
-	Notice          string                 `json:"notice"`
-	PendingLeftMS   int64                  `json:"pending_left_ms"`
-	Kicked          bool                   `json:"kicked"`
+	ProtocolVersion    int                    `json:"protocol_version"`
+	GameID             string                 `json:"game_id"`
+	Code               string                 `json:"code"`
+	Revision           uint64                 `json:"revision"`
+	Phase              string                 `json:"phase"`
+	Players            []client.Player        `json:"players"`
+	MySeat             int                    `json:"my_seat"`
+	MaxSeats           int                    `json:"max_seats"`
+	IsHost             bool                   `json:"is_host"`
+	View               any                    `json:"view"`
+	Timeline           []client.TimelineEntry `json:"timeline"`
+	Vote               *client.Vote           `json:"vote"`
+	Notice             string                 `json:"notice"`
+	PendingLeftMS      int64                  `json:"pending_left_ms"`
+	Kicked             bool                   `json:"kicked"`
+	SettlementRevision uint64                 `json:"settlement_revision"`
 }
 
 func (m *membership) encode(snap client.Snapshot) (Snapshot, error) {
@@ -129,7 +130,7 @@ func (m *membership) encode(snap client.Snapshot) (Snapshot, error) {
 	if timeline == nil {
 		timeline = []client.TimelineEntry{}
 	}
-	return Snapshot{1, m.game.ID, snap.Code, snap.Revision, phase, snap.Players, snap.MySeat, snap.MaxSeats, snap.IsHost, view, timeline, snap.Vote, snap.Notice, snap.PendingLeftMS, snap.Kicked}, nil
+	return Snapshot{1, m.game.ID, snap.Code, snap.Revision, phase, snap.Players, snap.MySeat, snap.MaxSeats, snap.IsHost, view, timeline, snap.Vote, snap.Notice, snap.PendingLeftMS, snap.Kicked, snap.SettlementRevision}, nil
 }
 func (s *Service) currentLocked(id, code string) (*membership, error) {
 	if s.closed {

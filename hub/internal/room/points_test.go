@@ -63,6 +63,10 @@ func TestFinalSettlementAllActionPaths(t *testing.T) {
 			if calls != 1 || r.phase != Over || s.Scores[0] != 68 || s.Scores[1] != 0 {
 				t.Fatalf("calls=%d phase=%v scores=%v", calls, r.phase, s.Scores)
 			}
+			snap, err := r.SnapshotFor("account:alice")
+			if err != nil || snap.SettlementRevision != 1 {
+				t.Fatalf("settlement revision not published: %+v %v", snap, err)
+			}
 			r.afterStateLocked()
 			r.tick()
 			if calls != 1 {
@@ -99,6 +103,9 @@ func TestSettlementFailureRetriesAndProtectsResult(t *testing.T) {
 	if !r.settlementPending || r.phase != Playing {
 		t.Fatal("failed settlement did not remain pending")
 	}
+	if snap, err := r.SnapshotFor("alice"); err != nil || snap.SettlementRevision != 0 {
+		t.Fatalf("failed settlement published as successful: %+v %v", snap, err)
+	}
 	if err := r.Start("alice"); err == nil {
 		t.Fatal("restarted before settlement")
 	}
@@ -117,6 +124,9 @@ func TestSettlementFailureRetriesAndProtectsResult(t *testing.T) {
 	if r.settlementPending || r.phase != Over || len(results) != 3 {
 		t.Fatalf("settlement did not recover: %+v", results)
 	}
+	if snap, err := r.SnapshotFor("alice"); err != nil || snap.SettlementRevision != 1 {
+		t.Fatalf("recovered settlement not published: %+v %v", snap, err)
+	}
 	for _, result := range results {
 		if result != results[0] {
 			t.Fatal("retry changed result or match ID")
@@ -125,6 +135,9 @@ func TestSettlementFailureRetriesAndProtectsResult(t *testing.T) {
 	mustStart(t, r, "alice")
 	if r.matchID == results[0].ID || r.settled {
 		t.Fatal("new match reused settlement identity")
+	}
+	if snap, err := r.SnapshotFor("alice"); err != nil || snap.SettlementRevision != 1 {
+		t.Fatalf("new match reset settlement revision: %+v %v", snap, err)
 	}
 }
 
@@ -146,6 +159,9 @@ func TestLongMatchSettlesOnlyFinalWinnerTotal(t *testing.T) {
 	}
 	if r.Game.Phase(s) != game.RoundOver || len(results) != 0 {
 		t.Fatal("intermediate round rewarded")
+	}
+	if r.settlementRevision != 0 {
+		t.Fatal("intermediate round published a settlement")
 	}
 	id := r.matchID
 	mustStart(t, r, "alice")

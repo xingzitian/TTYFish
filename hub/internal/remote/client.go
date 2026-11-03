@@ -40,21 +40,22 @@ type Client struct {
 
 // 后端快照的线格式。字段名和后端 internal/play 的 Snapshot 一致。
 type wireSnapshot struct {
-	ProtocolVersion int                    `json:"protocol_version"`
-	GameID          string                 `json:"game_id"`
-	Code            string                 `json:"code"`
-	Revision        uint64                 `json:"revision"`
-	Phase           string                 `json:"phase"`
-	Players         []client.Player        `json:"players"`
-	MySeat          int                    `json:"my_seat"`
-	MaxSeats        int                    `json:"max_seats"`
-	IsHost          bool                   `json:"is_host"`
-	View            json.RawMessage        `json:"view"`
-	Timeline        []client.TimelineEntry `json:"timeline"`
-	Vote            *client.Vote           `json:"vote"`
-	Notice          string                 `json:"notice"`
-	PendingLeftMS   int64                  `json:"pending_left_ms"`
-	Kicked          bool                   `json:"kicked"`
+	ProtocolVersion    int                    `json:"protocol_version"`
+	GameID             string                 `json:"game_id"`
+	Code               string                 `json:"code"`
+	Revision           uint64                 `json:"revision"`
+	Phase              string                 `json:"phase"`
+	Players            []client.Player        `json:"players"`
+	MySeat             int                    `json:"my_seat"`
+	MaxSeats           int                    `json:"max_seats"`
+	IsHost             bool                   `json:"is_host"`
+	View               json.RawMessage        `json:"view"`
+	Timeline           []client.TimelineEntry `json:"timeline"`
+	Vote               *client.Vote           `json:"vote"`
+	Notice             string                 `json:"notice"`
+	PendingLeftMS      int64                  `json:"pending_left_ms"`
+	Kicked             bool                   `json:"kicked"`
+	SettlementRevision uint64                 `json:"settlement_revision"`
 }
 
 // New 建一个客户端。base 是后端地址，例如 http://127.0.0.1:8081。
@@ -317,18 +318,20 @@ func (c *Client) apply(w wireSnapshot) {
 	c.code = w.Code
 
 	snap := client.Snapshot{
-		Code:          w.Code,
-		Phase:         phaseOf(w.Phase),
-		Players:       w.Players,
-		MySeat:        w.MySeat,
-		MaxSeats:      w.MaxSeats,
-		IsHost:        w.IsHost,
-		Timeline:      w.Timeline,
-		Vote:          w.Vote,
-		Notice:        w.Notice,
-		PendingLeftMS: w.PendingLeftMS,
-		Kicked:        w.Kicked,
-		View:          decodeView(w.View, w.MySeat),
+		Revision:           w.Revision,
+		SettlementRevision: w.SettlementRevision,
+		Code:               w.Code,
+		Phase:              phaseOf(w.Phase),
+		Players:            w.Players,
+		MySeat:             w.MySeat,
+		MaxSeats:           w.MaxSeats,
+		IsHost:             w.IsHost,
+		Timeline:           w.Timeline,
+		Vote:               w.Vote,
+		Notice:             w.Notice,
+		PendingLeftMS:      w.PendingLeftMS,
+		Kicked:             w.Kicked,
+		View:               decodeView(w.View, w.MySeat),
 	}
 	c.snap = snap
 	closed := c.closed

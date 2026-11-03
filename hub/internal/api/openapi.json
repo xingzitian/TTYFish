@@ -3630,6 +3630,12 @@
           },
           "kicked": {
             "type": "boolean"
+          },
+          "settlement_revision": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "description": "房间内成功完成最终结算的累计版本；新比赛不清零。版本增加后可重新查询真实 PT 余额，不用于重复发奖。"
           }
         },
         "required": [
@@ -3647,7 +3653,8 @@
           "vote",
           "notice",
           "pending_left_ms",
-          "kicked"
+          "kicked",
+          "settlement_revision"
         ]
       },
       "UnoCard": {

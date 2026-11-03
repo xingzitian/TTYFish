@@ -121,31 +121,32 @@ type Room struct {
 	Code string
 	Game game.Game
 
-	mu                sync.Mutex
-	opts              Options
-	phase             Phase
-	state             any
-	matchID           string
-	settled           bool
-	settlementPending bool
-	seats             []*seat
-	byFP              map[string]*seat
-	subs              map[*seat]chan Snapshot
-	turnAt            time.Time
-	lastActive        time.Time
-	abandonedAt       time.Time
-	startedAt         time.Time
-	timeline          []TimelineEntry
-	logSeq            int
-	pendingID         string
-	pendingEnd        time.Time
-	pendingAct        any
-	vote              *voteState
-	notice            string
-	noticeAt          time.Time
-	closed            bool
-	revision          uint64
-	stop              chan struct{}
+	mu                 sync.Mutex
+	opts               Options
+	phase              Phase
+	state              any
+	matchID            string
+	settled            bool
+	settlementPending  bool
+	settlementRevision uint64
+	seats              []*seat
+	byFP               map[string]*seat
+	subs               map[*seat]chan Snapshot
+	turnAt             time.Time
+	lastActive         time.Time
+	abandonedAt        time.Time
+	startedAt          time.Time
+	timeline           []TimelineEntry
+	logSeq             int
+	pendingID          string
+	pendingEnd         time.Time
+	pendingAct         any
+	vote               *voteState
+	notice             string
+	noticeAt           time.Time
+	closed             bool
+	revision           uint64
+	stop               chan struct{}
 }
 
 // New 建一间空房。
@@ -791,6 +792,7 @@ func (r *Room) afterStateLocked() {
 		}
 		r.settled = true
 		r.settlementPending = false
+		r.settlementRevision++
 	}
 	r.phase = Over
 	r.vote = nil
@@ -909,15 +911,16 @@ func (r *Room) Abandoned(ttl time.Duration) bool {
 
 func (r *Room) snapshotLocked(s *seat) Snapshot {
 	snap := Snapshot{
-		Revision: r.revision,
-		Code:     r.Code,
-		Phase:    r.phase,
-		MySeat:   s.seat,
-		MaxSeats: r.Game.MaxSeats(),
-		IsHost:   s.host,
-		Notice:   r.notice,
-		Timeline: append([]TimelineEntry(nil), r.timeline...),
-		Players:  make([]Player, 0, len(r.seats)),
+		Revision:           r.revision,
+		SettlementRevision: r.settlementRevision,
+		Code:               r.Code,
+		Phase:              r.phase,
+		MySeat:             s.seat,
+		MaxSeats:           r.Game.MaxSeats(),
+		IsHost:             s.host,
+		Notice:             r.notice,
+		Timeline:           append([]TimelineEntry(nil), r.timeline...),
+		Players:            make([]Player, 0, len(r.seats)),
 	}
 	if r.phase == Playing || r.phase == Over {
 		snap.View = r.Game.Observe(r.state, s.seat)

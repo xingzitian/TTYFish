@@ -2,13 +2,25 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/xingzitian/TTYFish/games/uno"
+	"github.com/xingzitian/TTYFish/games/uno/engine"
 	"github.com/xingzitian/TTYFish/hub/internal/backend"
+	"github.com/xingzitian/TTYFish/hub/internal/play"
 	"github.com/xingzitian/TTYFish/hub/internal/registry"
+	"github.com/xingzitian/TTYFish/hub/internal/room"
+	"github.com/xingzitian/TTYFish/hub/internal/store"
+	"github.com/xingzitian/TTYFish/sdk/client"
+	"github.com/xingzitian/TTYFish/sdk/game"
 	"github.com/xingzitian/TTYFish/sdk/ui"
 )
 
@@ -89,3 +101,116 @@ func TestPointsErrorDoesNotClearBalance(t *testing.T) {
 }
 
 var _ = tea.Quit
+
+func TestSettlementRefreshesPersistedPointsInsideRoom(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "points.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	a, err := st.Register("alice", "test-password-123", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet || req.URL.Path != "/api/v1/me/points" {
+			t.Errorf("unexpected request %s %s", req.Method, req.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		queries++
+		balance, err := st.PTTenths(a.ID)
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"balance_tenths": balance, "balance_pt": fmt.Sprintf("%d.%d", balance/10, balance%10),
+		})
+	}))
+	defer server.Close()
+	identity := "account:" + a.ID
+	rm := room.New("ABC234", pointsUNO{uno.New(engine.Rules{})}, room.Options{
+		NoLoop: true, OnMatchEnd: play.UNORewards(st),
+	})
+	defer rm.Close()
+	for _, player := range []string{identity, "account:bob"} {
+		if _, err := rm.Join(player, player); err != nil {
+			t.Fatal(err)
+		}
+	}
+	updates, cancel, err := rm.Subscribe(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	<-updates
+	start := func() client.SnapshotMsg {
+		t.Helper()
+		if err := rm.Start(identity); err != nil {
+			t.Fatal(err)
+		}
+		return client.SnapshotMsg(<-updates)
+	}
+	win := func() client.SnapshotMsg {
+		t.Helper()
+		if err := rm.Act(identity, engine.PlayCard{Seat: 0, CardID: 91}); err != nil {
+			t.Fatal(err)
+		}
+		return client.SnapshotMsg(<-updates)
+	}
+	model := &modalModel{}
+	r := newEscRoot(t, model)
+	r.deps.Accounts = backend.New(server.URL, "")
+	r.deps.Player.Token = "player-token"
+	r.Update(r.refreshPoints()())
+	oldQuery := pointsMsg{pt: "0.0", query: r.pointsQuery}
+	if r.balancePT != "0.0" {
+		t.Fatal("initial balance not loaded in room")
+	}
+	forwarded := model.forward
+	if _, cmd := r.Update(start()); cmd != nil {
+		t.Fatal("unsettled snapshot queried points")
+	}
+	snap := win()
+	_, cmd := r.Update(snap)
+	if cmd == nil {
+		t.Fatal("successful settlement did not schedule points query")
+	}
+	r.Update(cmd())
+	r.Update(oldQuery)
+	if r.level != levelTable || r.roomClient == nil || !strings.Contains(strip(r.View()), "10.0pt") {
+		t.Fatalf("persisted balance not shown without leaving: %s", strip(r.View()))
+	}
+	if model.forward != forwarded+2 {
+		t.Fatal("points replies should not be forwarded to game; snapshots should")
+	}
+	for _, next := range []client.SnapshotMsg{snap, start()} {
+		if _, cmd := r.Update(next); cmd != nil {
+			t.Fatal("duplicate settlement or new match queried points again")
+		}
+	}
+	// A coalesced snapshot may already belong to a later match.
+	win()
+	_, cmd = r.Update(start())
+	r.Update(cmd())
+	if r.balancePT != "20.0" || queries != 3 {
+		t.Fatalf("balance=%s queries=%d", r.balancePT, queries)
+	}
+}
+
+type pointsUNO struct{ uno.Game }
+
+func (g pointsUNO) NewMatch(players []game.PlayerSeed, seed int64) any {
+	s := g.Game.NewMatch(players, seed).(*engine.State)
+	s.Turn = 0
+	s.Active = engine.Red
+	s.Discard = []engine.Card{{ID: 90, Color: engine.Red, Kind: engine.Number, Num: 3}}
+	s.Hands = [][]engine.Card{
+		{{ID: 91, Color: engine.Red, Kind: engine.Number, Num: 7}},
+		{{ID: 92, Kind: engine.Wild}, {ID: 93, Kind: engine.Wild}},
+	}
+	return s
+}

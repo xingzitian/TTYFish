@@ -90,6 +90,9 @@ func TestPTAPIAndUNORewardEndToEnd(t *testing.T) {
 		if ended.Phase != "over" {
 			t.Fatalf("match %d not over: %+v", match, ended)
 		}
+		if started.SettlementRevision != uint64(match) || ended.SettlementRevision != uint64(match+1) {
+			t.Fatalf("settlement revision missing from wire snapshots: start=%+v end=%+v", started, ended)
+		}
 		assertPoints(alice, want.tenths, want.pt)
 		assertPoints(bob, 0, "0.0")
 		f.request("POST", base+"/actions", alice, body, 409)

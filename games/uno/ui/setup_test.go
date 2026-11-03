@@ -44,12 +44,29 @@ func TestSecondLoginDoesNotAsk(t *testing.T) {
 		LayoutOf:  func(k string) (ui.Layout, bool) { return ui.LayoutCompact, true },
 		SetLayout: func(k string, l ui.Layout) {},
 	}
+
 	m := NewModel(Identity{Key: "k1", Name: "n"}, testClient(sampleSnap(1)), opts, nil)
 	if m.needLayoutChoice {
 		t.Fatal("已经有偏好就不该再问")
 	}
 	if !m.minimal {
 		t.Fatal("应该恢复上次选的极简模式")
+	}
+}
+
+func TestRoomUpdateUsesSharedSnapshotMessage(t *testing.T) {
+	c := testClient(sampleSnap(1))
+	m := NewModel(Identity{Key: "alice"}, c, Options{}, nil)
+	snap := sampleSnap(2)
+	snap.SettlementRevision = 1
+	c.ch <- snap
+	msg := m.Init()()
+	if update, ok := msg.(client.SnapshotMsg); !ok || update.SettlementRevision != 1 {
+		t.Fatalf("room update is not visible to gateway: %#v", msg)
+	}
+	m.Update(msg)
+	if m.snap.SettlementRevision != 1 {
+		t.Fatal("shared update not applied to game")
 	}
 }
 

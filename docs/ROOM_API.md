@@ -42,6 +42,7 @@ go run ./cmd/backend -cors-origins http://localhost:5173
   "game_id": "uno",
   "code": "ABC234",
   "revision": 1,
+  "settlement_revision": 0,
   "phase": "lobby",
   "players": [{"seat":0,"name":"alice","host":true,"connected":true,"bot":false,"offline":0}],
   "my_seat": 0,
@@ -58,6 +59,7 @@ go run ./cmd/backend -cors-origins http://localhost:5173
 
 - `phase` 为 `lobby`、`playing` 或 `over`，与游戏内部阶段分开。
 - `revision` 是当前房间生命周期内单调递增的广播版本。机器人、玩家、加入退出、聊天等状态变化都会推进版本。不同房间的版本不能互相比。
+- `settlement_revision` 在最终结算成功后递增，失败重试及长赛中间小局不递增，新比赛也不清零。TUI 收到版本增加的快照后异步查询真实 PT 余额，无需退房；完整快照即使跳过结算帧也保留该版本。此字段不是奖励请求，不会重复发奖；读取余额失败时记录错误并保留已显示余额。
 - `view` 在大厅为 null，开局后由对应游戏的 `Observe` 裁剪，再由协议适配器编码。只包含该座位允许看到的信息。
 - UNO 的 `view.hand` 是自己的手牌，`hand_counts` 仅是每人的数量；不会发送其他玩家手牌、牌堆顺序或随机种子。`drawn_id` 只对本回合摸牌的玩家显示，其余为 -1。
 - UNO 的 `view.legal` 是带 `type` 与 `payload` 的合法动作列表，可以直接复制到动作请求。喊 UNO、抓漏喊等非回合动作仍按规则判断，不保证都出现在回合合法列表中。

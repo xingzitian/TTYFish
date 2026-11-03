@@ -72,9 +72,7 @@ func main() {
 		ID:   "uno",
 		Game: uno.New(displayRules),
 		NewUI: func(c registry.UIContext) registry.Model {
-			return unoUI.NewModel(unoUI.Identity{Key: c.Key, Name: c.Name}, c.Client, unoUI.Options{
-				Rules: displayRules, Mode: c.Mode, ModeOf: c.ModeOf, SetMode: c.SetMode,
-			}, unoUI.NewRenderer(c.Output, c.Term))
+			return newUNOUI(c, displayRules)
 		},
 	}); err != nil {
 		slog.Error("注册游戏失败", "err", err)
@@ -116,4 +114,11 @@ func main() {
 		slog.Error("监听失败", "err", err)
 		os.Exit(1)
 	}
+}
+
+func newUNOUI(c registry.UIContext, rules engine.Rules) registry.Model {
+	return unoUI.NewModel(unoUI.Identity{Key: c.Key, Name: c.Name}, c.Client, unoUI.Options{
+		Rules: rules, Mode: c.Mode, ModeOf: c.ModeOf, SetMode: c.SetMode,
+		Layout: c.Layout, LayoutOf: c.LayoutOf, SetLayout: c.SetLayout,
+	}, unoUI.NewRenderer(c.Output, c.Term))
 }
