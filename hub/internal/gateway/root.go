@@ -259,9 +259,13 @@ func (r *Root) gotoLevel(l level) {
 		}
 		canTogglePasswordLogin := r.deps.Accounts != nil && r.deps.Player.Token != ""
 		passwordHint := ""
-		if !canTogglePasswordLogin {
+		switch {
+		case r.deps.Accounts == nil:
+			// 预览模式没有后端，这一项是真的开不了，说清楚别让人以为坏了
+			passwordHint = "（预览模式不可用）"
+		case !canTogglePasswordLogin:
 			passwordHint = "（不可用）"
-		} else if passwordLogin && !r.deps.Player.Account.HasSSHKey {
+		case passwordLogin && !r.deps.Player.Account.HasSSHKey:
 			canTogglePasswordLogin = false
 			passwordHint = "（需先绑定 SSH 公钥）"
 		}

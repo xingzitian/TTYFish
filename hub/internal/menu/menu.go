@@ -145,8 +145,9 @@ func (m *Model) View() string {
 		if item.Hint != "" {
 			label += " " + item.Hint
 		}
-		if !item.Enabled {
-			// 不可选项用括号括起来，明确"看得到但按不了"
+		// 不可选要有标记；但条目自己已经写了"不可用"就别重复，
+		// 以前会叠成"（不可用）（暂不可用）"，像坏了两次。
+		if !item.Enabled && !strings.Contains(item.Hint, "不可用") {
 			label += "（暂不可用）"
 		}
 		lines = append(lines, style.Render(ui.CutWidth(marker+label, m.width)))

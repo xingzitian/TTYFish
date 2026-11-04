@@ -170,19 +170,22 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 			m.opts.SetMode(m.id.Key, m.mode)
 		}
 		return nil
+	case "?":
+		m.help = !m.help
+		return nil
 	case "i":
 		m.toggleLayout()
 		return nil
 	case "tab":
 		m.playersUntil = time.Now().Add(playerPanelTTL)
 		return tea.Tick(playerPanelTTL, func(time.Time) tea.Msg { return hidePlayersMsg{} })
-	case "-", "_", "left", "h":
+	case "-", "_", "left":
 		// 主键是 -/=：不少输入法用这两个翻页，手指不用离开主键区
 		if m.page > 0 {
 			m.page--
 		}
 		return nil
-	case "=", "+", "right", "l":
+	case "=", "+", "right":
 		if _, pages := m.compactPage(); m.page < pages-1 {
 			m.page++
 		}
@@ -190,12 +193,7 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 	}
 
 	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
-		idx := int(key[0] - '1')
-		hand, _ := m.compactPage()
-		if idx >= len(hand) {
-			return nil
-		}
-		m.playCardID(hand[idx])
+		m.playIndex(int(key[0] - '1'))
 		return nil
 	}
 
@@ -286,7 +284,7 @@ func (m *Model) viewCompactChat() string {
 		items = append(items, fmt.Sprintf("%d.%s", i+1, shortName(p, 12)))
 	}
 	body := "[CHAT] " + strings.Join(items, " ")
-	for len([]rune(body)) > m.width && len(items) > 1 {
+	for lipgloss.Width(body) > m.width && len(items) > 1 {
 		items = items[:len(items)-1]
 		body = "[CHAT] " + strings.Join(items, " ")
 	}
@@ -386,7 +384,7 @@ func (m *Model) compactLobbyCmd() string {
 	items = append(items, "[T]聊天", "[V]投票", "[Esc]离开", "[I]界面")
 
 	body := "[CMD] " + strings.Join(items, " ")
-	for len([]rune(body)) > m.width && len(items) > 1 {
+	for lipgloss.Width(body) > m.width && len(items) > 1 {
 		items = items[:len(items)-1]
 		body = "[CMD] " + strings.Join(items, " ")
 	}
@@ -662,7 +660,7 @@ func (m *Model) compactCmd(obs engine.Observation) string {
 		return m.warn().Render("[CMD] 选颜色 [1]红 [2]黄 [3]蓝 [4]绿  (Esc 取消)")
 	}
 
-	items := []string{"[1-5]出牌", "[U]UNO", "[D]摸牌", "[C]抓包", "[T]聊天", "[Tab]玩家", "[-=]翻页", "[I]界面", "[Q]退"}
+	items := []string{"[?]帮助", "[1-5]出牌", "[U]UNO", "[D]摸牌", "[C]抓包", "[T]聊天", "[Tab]玩家", "[-=]翻页", "[I]界面"}
 	if obs.DrawnID >= 0 {
 		items = append(items, "[P]过牌")
 	}
@@ -671,7 +669,7 @@ func (m *Model) compactCmd(obs engine.Observation) string {
 	}
 	body := "[CMD] " + strings.Join(items, " ")
 	// 超宽就整项丢掉，不要把一个命令切成两半
-	for len([]rune(body)) > m.width && len(items) > 1 {
+	for lipgloss.Width(body) > m.width && len(items) > 1 {
 		items = items[:len(items)-1]
 		body = "[CMD] " + strings.Join(items, " ")
 	}
@@ -736,3 +734,52 @@ func (m *Model) toggleLayout() {
 
 var _ = lipgloss.NewStyle
 var _ = client.Playing
+
+// richPageSize 是丰富模式一页的手牌数：数字键只有 1-9，正好用满。
+const richPageSize = 9
+
+// handPage 返回丰富模式的当前页和总页数。
+//
+// 排序必须和极简一致（sortHand），否则同一张牌在两种模式下的数字不一样。
+func (m *Model) handPage() ([]engine.Card, int) {
+	hand := sortHand(m.obs().Hand)
+	pages := (len(hand) + richPageSize - 1) / richPageSize
+	if pages < 1 {
+		pages = 1
+	}
+	if m.page > pages-1 {
+		m.page = pages - 1
+	}
+	if m.page < 0 {
+		m.page = 0
+	}
+	start := m.page * richPageSize
+	if start > len(hand) {
+		start = len(hand)
+	}
+	end := start + richPageSize
+	if end > len(hand) {
+		end = len(hand)
+	}
+	return hand[start:end], pages
+}
+
+// prevPage / nextPage 是两种模式共用的翻页。
+func (m *Model) prevPage() {
+	if m.page > 0 {
+		m.page--
+	}
+}
+
+// nextPage 往后翻一页；已经在最后一页就原地不动。
+func (m *Model) nextPage() {
+	var pages int
+	if m.minimal {
+		_, pages = m.compactPage()
+	} else {
+		_, pages = m.handPage()
+	}
+	if m.page < pages-1 {
+		m.page++
+	}
+}

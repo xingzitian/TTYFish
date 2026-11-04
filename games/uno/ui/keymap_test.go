@@ -37,9 +37,17 @@ func (r *recorder) Join(code string) error          { r.record("join:" + code); 
 func (r *recorder) Leave() error                    { r.record("leave"); return nil }
 func (r *recorder) Start() error                    { r.record("start"); return nil }
 func (r *recorder) AddBot() error                   { r.record("addbot"); return nil }
-func (r *recorder) Act(a any) error                 { r.record(fmt.Sprintf("act:%T", a)); return nil }
-func (r *recorder) Chat(i int) error                { r.record("chat"); return nil }
-func (r *recorder) VoteRestart(agree bool) error    { r.record("vote"); return nil }
+func (r *recorder) Act(a any) error {
+	if pc, ok := a.(engine.PlayCard); ok {
+		// 带上牌号：翻页相关的测试要断言"出的是第二页第一张"
+		r.record(fmt.Sprintf("act:%T#%d", a, pc.CardID))
+		return nil
+	}
+	r.record(fmt.Sprintf("act:%T", a))
+	return nil
+}
+func (r *recorder) Chat(i int) error             { r.record("chat"); return nil }
+func (r *recorder) VoteRestart(agree bool) error { r.record("vote"); return nil }
 
 // state 是一套"快照 + 模式"的组合，代表界面的一种处境。
 type state struct {
@@ -57,11 +65,19 @@ func lobbyState(minimal bool) state {
 
 func playingState(minimal bool) state {
 	snap := sampleSnap(20241029)
-	// 给够 8 张牌，极简模式才有第二页可翻；否则"按左键没反应"是对的。
+	// 给够 12 张牌：丰富一页 9 张、极简一页 5 张，两边都有第二页可翻。
 	setObs(&snap, func(o *engine.Observation) {
 		o.Hand = nil
-		for i := 0; i < 8; i++ {
+		for i := 0; i < 12; i++ {
 			o.Hand = append(o.Hand, engine.Card{ID: i, Color: engine.Red, Kind: engine.Number, Num: i % 10})
+		}
+		o.Turn = o.Seat       // 轮到"我"，出牌类按键才该有反应
+		o.Active = engine.Red // 手牌全是红牌
+		o.Phase = engine.Playing
+		// 合法性看的是引擎给的 Legal 列表，夹具得跟着补，否则按数字永远"出不了"
+		o.Legal = nil
+		for _, c := range o.Hand {
+			o.Legal = append(o.Legal, engine.PlayCard{Seat: o.Seat, CardID: c.ID})
 		}
 	})
 	return state{name: "牌桌", snap: snap, minimal: minimal}
@@ -93,8 +109,8 @@ func TestAdvertisedKeysRespond(t *testing.T) {
 	for _, s := range []state{lobbyState(false), lobbyState(true)} {
 		for _, k := range []keyCase{{"s", "开始"}, {"b", "加电脑"}, {"t", "聊天"}, {"v", "投票"}, {"l", "离开"}, {"q", "退出"}, {"i", "界面"}} {
 			m, rec := s.model()
-			if s.minimal && k.key == "-" {
-				m.page = 1 // 第一页按左键本来就该没反应
+			if k.key == "-" {
+				m.page = 1 // 第一页按上一页本来就该没反应
 			}
 			before := fingerprint(m)
 			cmd := m.handleKey(keyOf(k.key))
@@ -104,19 +120,14 @@ func TestAdvertisedKeysRespond(t *testing.T) {
 		}
 	}
 
+	// 两种模式同一套键：数字直接出牌、-= 翻页、? 帮助。
 	richKeys := []keyCase{
-		{"2", "选牌"}, {"d", "摸牌"}, {"p", "过牌"}, {"u", "喊UNO"}, {"c", "抓包"},
+		{"2", "出牌"}, {"-", "翻页"}, {"=", "翻页"}, {"?", "帮助"},
+		{"d", "摸牌"}, {"p", "过牌"}, {"u", "喊UNO"}, {"c", "抓包"},
 		{"t", "聊天"}, {"v", "重开"}, {"m", "颜色"}, {"i", "界面"}, {"q", "退出"},
-		{"enter", "出牌"},
 	}
 	compactKeys := append([]keyCase{}, richKeys...)
-	compactKeys = append(compactKeys,
-		keyCase{"-", "翻页"}, keyCase{"=", "翻页"}, keyCase{"tab", "玩家"})
-	for i := range compactKeys {
-		if compactKeys[i].key == "enter" {
-			compactKeys[i].key = "3" // 极简里没有回车出牌，换成一张牌
-		}
-	}
+	compactKeys = append(compactKeys, keyCase{"tab", "玩家"})
 
 	for _, s := range []state{playingState(false), playingState(true)} {
 		keys := richKeys
@@ -125,8 +136,8 @@ func TestAdvertisedKeysRespond(t *testing.T) {
 		}
 		for _, k := range keys {
 			m, rec := s.model()
-			if s.minimal && k.key == "-" {
-				m.page = 1 // 第一页按左键本来就该没反应
+			if k.key == "-" {
+				m.page = 1 // 第一页按上一页本来就该没反应
 			}
 			before := fingerprint(m)
 			cmd := m.handleKey(keyOf(k.key))
@@ -186,7 +197,7 @@ func TestEnteringKeysRespond(t *testing.T) {
 func fingerprint(m *Model) string {
 	return strings.Join([]string{
 		fmt.Sprint(m.minimal), fmt.Sprint(m.chat), fmt.Sprint(m.boss),
-		fmt.Sprint(m.choosing), fmt.Sprint(m.page), fmt.Sprint(m.cursor), fmt.Sprint(m.quitting),
+		fmt.Sprint(m.choosing), fmt.Sprint(m.page), fmt.Sprint(m.help), fmt.Sprint(m.quitting),
 		m.mode.Slug(), m.errMsg,
 	}, "|")
 }

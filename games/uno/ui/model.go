@@ -74,10 +74,11 @@ type Model struct {
 	choosing bool
 	pending  engine.Card
 	mode     ui.ColorMode
-	cursor   int
-	width    int
-	height   int
-	layout   layoutKind
+	// help 为 true 时显示键位一览（? 打开）
+	help   bool
+	width  int
+	height int
+	layout layoutKind
 
 	// 极简模式
 	minimal bool
@@ -214,9 +215,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.closed {
 			return m, nil
 		}
-		if m.cursor >= len(m.obs().Hand) {
-			m.cursor = 0
-		}
 		return m, waitFor(m.sub)
 
 	case hidePlayersMsg:
@@ -240,6 +238,15 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	// 放在最前面，任何状态下都能用。
 	if key == "ctrl+b" {
 		m.boss = !m.boss
+		return nil
+	}
+
+	// 键位一览：只认关闭键，免得看着帮助时误触出牌
+	if m.help {
+		switch key {
+		case "?", "esc", "q":
+			m.help = false
+		}
 		return nil
 	}
 	if m.boss {
@@ -311,6 +318,9 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	}
 
 	switch key {
+	case "?":
+		m.help = true
+		return nil
 	case "q":
 		return m.quit()
 	case "t":
@@ -379,11 +389,21 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	// +4 质疑是模态的：轮到你决定时，其他牌桌按键都不该生效。
 	if obs.Challenge != nil && obs.Challenge.By == m.snap.MySeat {
 		switch key {
-		case "c":
+		case "n", "c":
 			m.act(engine.ResolveChallenge{Seat: m.snap.MySeat, Challenge: true})
-		case "enter", " ", "d":
+		case "y", "enter", " ":
 			m.act(engine.ResolveChallenge{Seat: m.snap.MySeat, Challenge: false})
 		}
+		return nil
+	}
+
+	// 翻页不属于"出牌动作"：轮不到我也应该能翻看自己的牌。
+	switch key {
+	case "-", "_", "left":
+		m.prevPage()
+		return nil
+	case "=", "+", "right":
+		m.nextPage()
 		return nil
 	}
 
@@ -392,16 +412,6 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	}
 
 	switch key {
-	case "left", "h":
-		if n := len(obs.Hand); n > 0 {
-			m.cursor = (m.cursor - 1 + n) % n
-		}
-	case "right", "l":
-		if n := len(obs.Hand); n > 0 {
-			m.cursor = (m.cursor + 1) % n
-		}
-	case "enter", " ":
-		m.playSelected()
 	case "d":
 		m.act(engine.DrawCard{Seat: m.snap.MySeat})
 	case "p":
@@ -415,14 +425,8 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 			m.fail("现在没有人漏喊 UNO")
 		}
 	default:
-		if len(key) == 1 && key[0] >= '0' && key[0] <= '9' {
-			idx := int(key[0] - '0')
-			if idx == 0 {
-				idx = 10
-			}
-			if idx--; idx >= 0 && idx < len(obs.Hand) {
-				m.cursor = idx
-			}
+		if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+			m.playIndex(int(key[0] - '1'))
 		}
 	}
 	return nil
@@ -465,15 +469,21 @@ func (m *Model) join(code string) tea.Cmd {
 	return waitFor(m.sub)
 }
 
-func (m *Model) playSelected() {
-	obs := m.obs()
-	if len(obs.Hand) == 0 {
+// playIndex 出当前页的第 i 张牌（0 起）。
+//
+// 两种模式都走这里：数字键直接出牌，不再有"移动光标再回车"那一套。
+func (m *Model) playIndex(i int) {
+	// 分页大小按当前模式走：极简一页 5 张、丰富一页 9 张
+	var page []engine.Card
+	if m.minimal {
+		page, _ = m.compactPage()
+	} else {
+		page, _ = m.handPage()
+	}
+	if i < 0 || i >= len(page) {
 		return
 	}
-	if m.cursor >= len(obs.Hand) {
-		m.cursor = len(obs.Hand) - 1
-	}
-	c := obs.Hand[m.cursor]
+	c := page[i]
 
 	if c.Kind == engine.Wild || c.Kind == engine.WildDrawFour {
 		m.choosing = true
@@ -527,7 +537,6 @@ func (m *Model) act(a engine.Action) {
 		return
 	}
 	m.fail("")
-	m.cursor = 0
 }
 
 func (m *Model) quit() tea.Cmd {
@@ -554,7 +563,7 @@ func (m *Model) leave() {
 //
 // 有的话 Esc 应该先关弹窗（选色、聊天、质疑），而不是被当成"离开房间"。
 func (m *Model) HasModal() bool {
-	return m.choosing || m.chat || m.entering || m.boss
+	return m.choosing || m.chat || m.entering || m.boss || m.help
 }
 
 func (m *Model) Close() {

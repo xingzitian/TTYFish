@@ -237,6 +237,10 @@ func (m *Model) render() string {
 	if m.boss {
 		return m.viewBoss()
 	}
+	// 键位一览：整屏换掉，省得和牌桌挤在一起
+	if m.help {
+		return m.viewHelp() + "\n"
+	}
 
 	switch {
 	case m.needLayoutChoice:
@@ -461,7 +465,7 @@ func (m *Model) viewLobby() string {
 	if m.snap.IsHost {
 		keys = "s 开始 · b 补一个电脑"
 	}
-	keys += " · i 界面 · t 快捷语 · v 重开投票 · l 离开 · q 断开连接"
+	keys += " · ? 帮助 · i 界面 · t 聊天 · l 离开"
 	b.WriteString(m.dim().Render(keys))
 	if m.errMsg != "" {
 		b.WriteString("\n" + m.warn().Render("! "+m.errMsg))
@@ -619,18 +623,14 @@ func (m *Model) viewSide(width, height int) string {
 	return m.renderPanel(lines, width, height)
 }
 
-// keyLines 是右下角常驻的按键表。双栏模式左侧只有 50 列，底部那行提示
-// 会被压成"u喊"，"UNO"三个字直接没了——完整键位得单独给块地方。
+// keyLines 是右侧常驻的"按键入口"。
+//
+// 完整键位已经搬到 ? 里了：这块以前要占八行，现在只留一行入口，
+// 省下来的高度全给出牌记录——记录比键位表更值得看。
 func (m *Model) keyLines() []string {
 	return []string{
 		"",
-		m.dim().Render("按键"),
-		m.dim().Render("1-9 选牌  ⏎ 出牌"),
-		m.dim().Render("d 摸牌  p 跳过"),
-		m.dim().Render("u 喊UNO  c 抓人"),
-		m.dim().Render("t 快捷语  v 重开"),
-		m.dim().Render("m 颜色  i 界面  q 退出"),
-		m.dim().Render("Ctrl+B 老板键"),
+		m.dim().Render("按 ? 看全部按键"),
 	}
 }
 
@@ -712,26 +712,25 @@ func (m *Model) viewTableCards() string {
 
 func (m *Model) viewHand() string {
 	obs := m.obs()
-	hand := obs.Hand
-	header := fmt.Sprintf("你的手牌 %d 张", len(hand))
+	page, pages := m.handPage()
+	header := fmt.Sprintf("你的手牌 %d 张", len(obs.Hand))
+	if pages > 1 {
+		header += fmt.Sprintf("  → %d/%d 页", m.page+1, pages)
+	}
 	if obs.Turn == m.snap.MySeat && obs.Phase == engine.Playing {
 		header = m.turn().Render("▶ " + header + " —— 轮到你")
 	} else {
 		header = m.dim().Render(header)
 	}
-	if len(hand) == 0 {
+	if len(page) == 0 {
 		return header
 	}
 
-	cards := make([]string, 0, len(hand))
-	for i, c := range hand {
-		// 序号放在色块外面：色块里再塞数字，颜色和数字糊在一起很难扫。
+	// 序号就是按键：按 3 出第 3 张，不再有光标和回车。
+	cards := make([]string, 0, len(page))
+	for i, c := range page {
 		idx := fmt.Sprintf("%2d:", i+1)
-		idxStyle := m.dim()
-		if i == m.cursor {
-			idxStyle = m.turn()
-		}
-		cards = append(cards, idxStyle.Render(idx)+m.renderCard(c, cardFace(c), i == m.cursor))
+		cards = append(cards, m.dim().Render(idx)+m.renderCard(c, cardFace(c), false))
 	}
 
 	// 每张牌 = 3 格序号 + 6 格牌面 + 1 格间距
@@ -795,24 +794,21 @@ func (m *Model) viewStatus() string {
 		return line + m.dim().Render(" · v 重开投票 · q 退出")
 
 	case obs.Turn != m.snap.MySeat:
-		if m.width < 54 {
-			return m.dim().Render("等对方出牌… t 快捷语 q 退出")
-		}
-		return m.dim().Render("等对方出牌…   t 快捷语 · v 重开投票 · q 退出")
+		return m.dim().Render(m.fitHint([]string{
+			"等对方出牌…", "[?]帮助", "[T]聊天", "[V]重开投票", "[Q]断开",
+		}, m.width))
 	}
 
-	narrow := m.width < 54
-	hint := "数字选牌 · Enter 出 · d 摸 · p 跳过 · u 喊UNO · t 快捷语 · q 退出"
-	if narrow {
-		// 窄屏也别把 UNO 三个字砍掉——"u喊"没人看得懂。
-		hint = "1-9选 回车出 d摸 p过 u喊UNO i界面 q退"
-	}
+	// 提示按宽度收敛：够宽就全给，窄了整项丢。
+	// 以前是固定长字符串，终端一窄就把左边撑宽，右边那栏被挤出屏幕。
+	hint := m.fitHint([]string{
+		"[?]帮助", "[1-9]出牌", "[-=]翻页", "[D]摸", "[P]过",
+		"[U]喊UNO", "[T]聊天", "[Q]断开",
+	}, m.width)
 	if obs.DrawnID >= 0 {
-		if narrow {
-			hint = "摸到能出的牌：回车打出 / p 留着"
-		} else {
-			hint = "刚摸到一张能出的牌：Enter 打出，或 p 留着跳过"
-		}
+		hint = m.fitHint([]string{
+			"刚摸到能出的牌：按它的数字打出", "[P] 留着跳过",
+		}, m.width)
 	}
 	if m.errMsg != "" {
 		return m.warn().Render("! "+m.errMsg) + "\n" + m.dim().Render(hint)
@@ -821,6 +817,27 @@ func (m *Model) viewStatus() string {
 		hint = fmt.Sprintf("重开投票 %d/%d（v 同意）  ", m.snap.Vote.Yes, m.snap.Vote.Need) + hint
 	}
 	return m.dim().Render(hint)
+}
+
+// fitHint 把若干提示词拼成一行，超宽就从尾部整项丢掉。
+//
+// 用显示宽度判断（中文两列），并且从尾部丢：最重要的"?"永远在最前面。
+func (m *Model) fitHint(tokens []string, width int) string {
+	out := ""
+	for _, tok := range tokens {
+		next := tok
+		if out != "" {
+			next = out + " · " + tok
+		}
+		if width > 0 && lipgloss.Width(next) > width {
+			break
+		}
+		out = next
+	}
+	if out == "" {
+		return tokens[len(tokens)-1]
+	}
+	return out
 }
 
 // viewColorMenu 是打变色牌时占掉手牌那几行的一行内联菜单。
