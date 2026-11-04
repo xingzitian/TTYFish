@@ -33,6 +33,7 @@ type Observation struct {
 	MatchWinner int             `json:"match_winner"`
 	MatchTo     int             `json:"match_to"`
 	UnoPending  int             `json:"uno_pending"`
+	UnoCalled   []bool          `json:"uno_called"`
 	Challenge   *ChallengeState `json:"challenge,omitempty"`
 }
 
@@ -58,6 +59,7 @@ func Observe(s *State, seat int) Observation {
 		MatchWinner:  s.MatchWinner,
 		MatchTo:      s.Rules.MatchTo,
 		UnoPending:   s.UnoPending,
+		UnoCalled:    append([]bool(nil), s.UnoCalled...),
 	}
 	for i := range s.Hands {
 		o.HandCounts[i] = len(s.Hands[i])

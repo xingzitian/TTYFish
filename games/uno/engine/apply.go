@@ -210,10 +210,9 @@ func (s *State) play(v PlayCard) error {
 	if len(s.Hands[v.Seat]) == 1 {
 		switch {
 		case v.Uno:
-			s.UnoCalled[v.Seat] = false
+			s.UnoCalled[v.Seat] = true
 			s.logf(v.Seat, "喊了 UNO！")
 		case s.UnoCalled[v.Seat]:
-			s.UnoCalled[v.Seat] = false
 		case s.Rules.UnoPenalty:
 			s.UnoPending = v.Seat
 			s.logf(-1, "只剩一张却没喊 UNO，下家可以抓")

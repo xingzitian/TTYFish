@@ -493,6 +493,9 @@ func (m *Model) turnMarquee(obs engine.Observation, width int) string {
 
 func (m *Model) turnBadge(obs engine.Observation, seat, width int) string {
 	count := fmt.Sprintf("(%d)", obs.HandCounts[seat])
+	if obs.HandCounts[seat] == 1 && seat < len(obs.UnoCalled) && obs.UnoCalled[seat] {
+		count = "(1|UNO)"
+	}
 	nameWidth := width - lipgloss.Width(count)
 	current := seat == obs.Turn
 	if current {
@@ -528,6 +531,15 @@ func (m *Model) compactTurn(obs engine.Observation) string {
 	if width < 24 {
 		tail = " " + arrow + m.turnFlow(obs.Dir)
 		width = m.width - lipgloss.Width("[TURN] "+tail)
+	}
+	if width < 30 {
+		for seat, called := range obs.UnoCalled {
+			if called && seat < len(obs.HandCounts) && obs.HandCounts[seat] == 1 {
+				tail = " " + arrow
+				width = m.width - lipgloss.Width("[TURN] "+tail)
+				break
+			}
+		}
 	}
 	return m.turn().Render("[TURN] ") + m.turnMarquee(obs, width) + tail
 }

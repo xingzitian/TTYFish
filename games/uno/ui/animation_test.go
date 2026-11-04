@@ -12,6 +12,34 @@ import (
 	"github.com/xingzitian/TTYFish/sdk/client"
 )
 
+func TestTurnDeclaredUnoBadge(t *testing.T) {
+	for _, width := range []int{40, 60, 80} {
+		m := testModel(t, width, sampleSnap(20241029))
+		m.minimal = true
+		setObs(&m.snap, func(o *engine.Observation) {
+			o.Turn = 1
+			o.HandCounts[1] = 1
+			o.UnoCalled = []bool{false, true, false, false}
+		})
+		line := strip(m.compactTurn(m.obs()))
+		if !strings.Contains(line, "(1|UNO)") || strings.Count(line, "(") != 3 ||
+			strings.Count(line, ")") != 3 || lipgloss.Width(line) != width {
+			t.Fatalf("width=%d incomplete UNO badge: %q", width, line)
+		}
+		setObs(&m.snap, func(o *engine.Observation) { o.UnoCalled[1] = false })
+		if strings.Contains(strip(m.compactTurn(m.obs())), "|UNO") {
+			t.Fatal("one remaining card alone must not count as a declaration")
+		}
+		setObs(&m.snap, func(o *engine.Observation) {
+			o.UnoCalled[1] = true
+			o.HandCounts[1] = 2
+		})
+		if strings.Contains(strip(m.compactTurn(m.obs())), "|UNO") {
+			t.Fatal("UNO badge must only appear with one remaining card")
+		}
+	}
+}
+
 func TestTurnFlowAtRightOfPlayers(t *testing.T) {
 	m := testModel(t, 80, sampleSnap(20241029))
 	m.minimal = true
@@ -138,9 +166,9 @@ func TestTurnAnimationTickLifecycle(t *testing.T) {
 	if m.animateTurn() != nil {
 		t.Fatal("must not schedule a second concurrent tick")
 	}
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 30; i++ {
 		_, next := m.Update(turnTickMsg{model: m})
-		if m.turnFrame != i%3 || next == nil || !m.turnTickPending {
+		if m.turnFrame != (i/10)%3 || next == nil || !m.turnTickPending {
 			t.Fatalf("tick %d did not advance and reschedule", i)
 		}
 	}
@@ -158,6 +186,19 @@ func TestTurnAnimationTickLifecycle(t *testing.T) {
 	_, next = m.Update(turnTickMsg{model: m})
 	if next != nil || m.turnTickPending {
 		t.Fatal("disconnection must stop animation")
+	}
+}
+
+func TestTurnQueueMovesFasterThanDirectionArrow(t *testing.T) {
+	m := testModel(t, 80, sampleSnap(20241029))
+	m.minimal = true
+	m.turnOffset = 12
+	_ = m.Init()
+	for i := 1; i <= 12; i++ {
+		_, _ = m.Update(turnTickMsg{model: m})
+		if m.turnOffset != 12-i || m.turnFrame != i/10 {
+			t.Fatalf("tick %d: queue offset=%d, arrow frame=%d", i, m.turnOffset, m.turnFrame)
+		}
 	}
 }
 

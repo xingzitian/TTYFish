@@ -144,7 +144,7 @@ func (s *Store) Sessions(id, token string) ([]SessionInfo, error) {
 		return nil, ErrSessionInvalid
 	}
 	rows, err := s.db.Query(`SELECT session_id,auth_method,credential_fp,created_at,expires_at,last_seen_at,source_ip,user_agent,token_hash=?,device_id
- FROM sessions WHERE account_id=? AND expires_at>? ORDER BY created_at DESC,session_id DESC`, hash(token), id, time.Now().UnixMilli())
+ FROM sessions WHERE account_id=? AND expires_at>? ORDER BY created_at DESC,rowid DESC`, hash(token), id, time.Now().UnixMilli())
 	if err != nil {
 		return nil, err
 	}

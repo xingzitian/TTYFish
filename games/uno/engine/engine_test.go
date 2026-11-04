@@ -436,6 +436,13 @@ func TestCallUnoSavesYou(t *testing.T) {
 	if s.UnoPending != -1 {
 		t.Fatalf("提前喊过 UNO 不该被挂起，实际 %d", s.UnoPending)
 	}
+	if !Observe(s, 1).UnoCalled[0] {
+		t.Fatal("declared UNO must remain visible after playing down to one card")
+	}
+	s.drawTo(0, 1)
+	if Observe(s, 1).UnoCalled[0] {
+		t.Fatal("drawing must clear declared UNO")
+	}
 }
 
 // TestUnoDeclaredWithPlay 验证"出牌同时喊 UNO"这条正常路径：
@@ -453,6 +460,14 @@ func TestUnoDeclaredWithPlay(t *testing.T) {
 	mustApply(t, s, PlayCard{Seat: 0, CardID: 10, Uno: true})
 	if s.UnoPending != -1 {
 		t.Fatalf("出牌时喊过 UNO 就不该挂起，实际 %d", s.UnoPending)
+	}
+	view := Observe(s, 1)
+	if !view.UnoCalled[0] {
+		t.Fatal("UNO declared with play must be public")
+	}
+	view.UnoCalled[0] = false
+	if !s.UnoCalled[0] {
+		t.Fatal("observation must not alias game state")
 	}
 }
 

@@ -122,6 +122,14 @@ func TestBrowserDeviceSessionsRetainTokensAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	created := time.Now().UnixMilli()
+	for i, token := range []string{first, otherDevice, latest} {
+		sessionID := strings.Repeat(string(rune('c'-i)), 32)
+		if _, err := s.db.Exec(`UPDATE sessions SET created_at=?,session_id=? WHERE token_hash=?`,
+			created, sessionID, hash(token)); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, ok, err := s.SessionAccount(first); err != nil || !ok {
 		t.Fatalf("previous browser tab session was revoked: ok=%t err=%v", ok, err)
 	}

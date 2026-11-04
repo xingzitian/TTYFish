@@ -88,6 +88,7 @@ type Model struct {
 	playersUntil     time.Time
 	errMsg           string
 	turnFrame        int
+	turnFlowTicks    int
 	turnTickPending  bool
 	turnOffset       int
 }
@@ -180,7 +181,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.model == m && m.turnTickPending {
 			m.turnTickPending = false
 			if m.turnAnimationVisible() {
-				m.turnFrame = (m.turnFrame + 1) % 3
+				m.turnFlowTicks++
+				if m.turnFlowTicks == 10 {
+					m.turnFrame = (m.turnFrame + 1) % 3
+					m.turnFlowTicks = 0
+				}
 				if m.turnOffset > 0 {
 					m.turnOffset--
 				} else if m.turnOffset < 0 {
