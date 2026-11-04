@@ -19,6 +19,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	kittens "github.com/xingzitian/TTYFish/games/explodingkittens"
+	kittensUI "github.com/xingzitian/TTYFish/games/explodingkittens/ui"
 	"github.com/xingzitian/TTYFish/games/uno"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
 	unoUI "github.com/xingzitian/TTYFish/games/uno/ui"
@@ -68,6 +70,16 @@ func main() {
 
 	// 网关能渲染哪些游戏，就在组装入口登记；后端那边开放哪些由 /api/v1/games 决定。
 	games := registry.New()
+	if err := games.Register(registry.Entry{
+		ID:   kittens.ID,
+		Game: kittens.Game{},
+		NewUI: func(c registry.UIContext) registry.Model {
+			return newKittensUI(c)
+		},
+	}); err != nil {
+		slog.Error("注册游戏失败", "err", err)
+		os.Exit(1)
+	}
 	if err := games.Register(registry.Entry{
 		ID:   "uno",
 		Game: uno.New(displayRules),
@@ -119,6 +131,13 @@ func main() {
 func newUNOUI(c registry.UIContext, rules engine.Rules) registry.Model {
 	return unoUI.NewModel(unoUI.Identity{Key: c.Key, Name: c.Name}, c.Client, unoUI.Options{
 		Rules: rules, Mode: c.Mode, ModeOf: c.ModeOf, SetMode: c.SetMode,
+		Layout: c.Layout, LayoutOf: c.LayoutOf, SetLayout: c.SetLayout,
+	}, unoUI.NewRenderer(c.Output, c.Term))
+}
+
+func newKittensUI(c registry.UIContext) registry.Model {
+	return kittensUI.NewModel(c.Client, kittensUI.Options{
+		Key: c.Key, Mode: c.Mode, ModeOf: c.ModeOf, SetMode: c.SetMode,
 		Layout: c.Layout, LayoutOf: c.LayoutOf, SetLayout: c.SetLayout,
 	}, unoUI.NewRenderer(c.Output, c.Term))
 }

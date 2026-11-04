@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	kittens "github.com/xingzitian/TTYFish/games/explodingkittens"
+	kitprotocol "github.com/xingzitian/TTYFish/games/explodingkittens/protocol"
 	"github.com/xingzitian/TTYFish/games/uno"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
 	"github.com/xingzitian/TTYFish/games/uno/protocol"
@@ -41,7 +43,10 @@ func run() error {
 		return err
 	}
 	defer st.Close()
-	games, err := play.New([]play.Game{{ID: "uno", Rules: uno.New(engine.Rules{Challenge: true, UnoPenalty: true}), Codec: protocol.Codec{}, Settle: play.UNORewards(st)}}, room.Options{})
+	games, err := play.New([]play.Game{
+		{ID: "uno", Rules: uno.New(engine.Rules{Challenge: true, UnoPenalty: true}), Codec: protocol.Codec{}, Settle: play.UNORewards(st)},
+		{ID: kittens.ID, Rules: kittens.Game{}, Codec: kitprotocol.Codec{}},
+	}, room.Options{})
 	if err != nil {
 		return err
 	}

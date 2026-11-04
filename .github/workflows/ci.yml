@@ -19,9 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      # 三个模块各自独立，任何一个挂了不该拖累另外两个。
+      # 模块各自独立，任何一个挂了不该拖累其他模块。
       matrix:
-        module: [sdk, games/uno, hub]
+        module: [sdk, games/uno, games/explodingkittens, hub]
     steps:
       - uses: actions/checkout@v4
 
@@ -30,7 +30,8 @@ jobs:
           # go.mod 里同时写了 go 1.24.2 和 toolchain go1.24.4。
           # 用 1.24.x 直接装最新的补丁版，免得 Go 在 CI 里再去下载 toolchain。
           go-version: '1.26.x'
-          # 三个模块的 go.sum 不一样，不按模块分开会让缓存互相覆盖。
+          cache: true
+          # 各模块的 go.sum 不一样，不按模块分开会让缓存互相覆盖。
           cache-dependency-path: ${{ matrix.module }}/go.sum
 
       - name: gofmt
@@ -58,7 +59,7 @@ jobs:
         run: go vet ./...
 
       # 只有 hub 开 -race：房间、订阅、会话全是并发，值得查；
-      # 另外两个模块基本是纯函数，race 检测意义不大但时间翻倍。
+      # 其他模块基本是纯函数，race 检测意义不大但时间翻倍。
       - name: test
         working-directory: ${{ matrix.module }}
         run: |

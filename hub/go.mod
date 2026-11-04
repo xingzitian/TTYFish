@@ -4,6 +4,10 @@ go 1.26.0
 
 require github.com/xingzitian/TTYFish/sdk v0.0.0
 
+require github.com/xingzitian/TTYFish/games/explodingkittens v0.0.0
+
+replace github.com/xingzitian/TTYFish/games/explodingkittens => ../games/explodingkittens
+
 replace github.com/xingzitian/TTYFish/sdk => ../sdk
 
 require (

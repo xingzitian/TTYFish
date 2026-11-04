@@ -15,6 +15,9 @@ import (
 	"sync"
 	"time"
 
+	kittens "github.com/xingzitian/TTYFish/games/explodingkittens"
+	kitengine "github.com/xingzitian/TTYFish/games/explodingkittens/engine"
+	kitprotocol "github.com/xingzitian/TTYFish/games/explodingkittens/protocol"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
 	"github.com/xingzitian/TTYFish/games/uno/protocol"
 	"github.com/xingzitian/TTYFish/sdk/client"
@@ -128,15 +131,36 @@ func (c *Client) Act(action any) error {
 	if code == "" {
 		return fmt.Errorf("还没进房间")
 	}
-	a, ok := action.(engine.Action)
-	if !ok {
-		return fmt.Errorf("不支持的动作类型 %T", action)
+	c.mu.Lock()
+	gameID := c.gameID
+	if gameID == "" {
+		gameID = c.game
 	}
-	wire := protocol.Codec{}.EncodeAction(a)
+	c.mu.Unlock()
+	var kind string
+	var payload any
+	switch gameID {
+	case kittens.ID:
+		a, ok := action.(kitengine.Action)
+		if !ok {
+			return fmt.Errorf("不支持的爆炸猫动作 %T", action)
+		}
+		wire := kitprotocol.Codec{}.EncodeAction(a)
+		kind, payload = wire.Type, wire.Payload
+	case "uno":
+		a, ok := action.(engine.Action)
+		if !ok {
+			return fmt.Errorf("不支持的 UNO 动作 %T", action)
+		}
+		wire := protocol.Codec{}.EncodeAction(a)
+		kind, payload = wire.Type, wire.Payload
+	default:
+		return fmt.Errorf("不支持的游戏 %q", gameID)
+	}
 	body := map[string]any{
 		"expected_revision": c.Revision(),
-		"type":              wire.Type,
-		"payload":           wire.Payload,
+		"type":              kind,
+		"payload":           payload,
 	}
 	snap, err := c.doRoomAction("POST", "/api/v1/rooms/"+code+"/actions", body)
 	if err != nil {
@@ -316,6 +340,7 @@ func (c *Client) apply(w wireSnapshot) {
 	}
 	c.rev = w.Revision
 	c.code = w.Code
+	c.gameID = w.GameID
 
 	snap := client.Snapshot{
 		Revision:           w.Revision,
@@ -331,7 +356,7 @@ func (c *Client) apply(w wireSnapshot) {
 		Notice:             w.Notice,
 		PendingLeftMS:      w.PendingLeftMS,
 		Kicked:             w.Kicked,
-		View:               decodeView(w.View, w.MySeat),
+		View:               decodeGameView(w.GameID, w.View, w.MySeat),
 	}
 	c.snap = snap
 	closed := c.closed
@@ -365,6 +390,23 @@ func phaseOf(s string) client.Phase {
 	default:
 		return client.Lobby
 	}
+}
+
+func decodeGameView(gameID string, raw json.RawMessage, seat int) any {
+	if gameID == kittens.ID {
+		var obs kitengine.Observation
+		if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return nil
+		}
+		if err := json.Unmarshal(raw, &obs); err != nil {
+			return nil
+		}
+		return obs
+	}
+	if gameID == "" || gameID == "uno" {
+		return decodeView(raw, seat)
+	}
+	return nil
 }
 
 // decodeView 把协议里的视图还原成 UNO 的 Observation，包括合法动作。

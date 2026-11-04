@@ -596,6 +596,17 @@ func (r *Root) openRoom(code string) tea.Cmd {
 		r.joinErr = err.Error()
 		return nil
 	}
+	if identified, ok := c.(interface{ GameID() string }); ok {
+		actual, exists := r.deps.Registry.Get(identified.GameID())
+		if !exists {
+			_ = c.Leave()
+			r.roomClient, r.conn = nil, nil
+			r.joinErr = "这个网关不支持房间里的游戏"
+			return nil
+		}
+		entry = actual
+		r.gameID = actual.ID
+	}
 	r.game = r.newGameUI(entry, c)
 	r.settlementRevision = c.Snapshot().SettlementRevision
 	r.level = levelTable

@@ -1,0 +1,39 @@
+# Exploding Kittens
+
+TTYFish 的第二款游戏，使用当前 Original Edition 基础规则（2–5 人）。
+规则引擎不依赖网络或时钟；SDK 适配器、协议和 TUI 分别位于模块根目录、
+`protocol` 和 `ui`。规则参考：[官方规则页](https://www.explodingkittens.com/pages/rules-kittens)。
+
+从 TUI 大厅选择 **Exploding Kittens**，创建或加入房间。以下命令均按回车执行：
+
+| 命令 | 用途 |
+| --- | --- |
+| `bot` / `start` | 房主加电脑 / 开始 |
+| `draw` | 摸牌并结束一次回合 |
+| `play 2` | 打出第 2 张手牌 |
+| `play 2 3` | 打出 Favor，要求 3 号玩家交牌 |
+| `pair 2 4 3` | 两张同名牌，随机偷 3 号玩家一张牌 |
+| `triple 2 4 5 3 defuse` | 三张同名牌，向 3 号玩家索要拆弹牌 |
+| `nope 2` / `pass` | 用第 2 张手牌反制 / 放弃本次反制 |
+| `give 2` | 被 Favor 时交出第 2 张手牌 |
+| `defuse 2 0` | 使用第 2 张拆弹牌，将爆炸猫放回牌顶 |
+| `vote` | 发起或赞成重开投票；通过后房主重新 `start` |
+| `i` / `m` / `help` | 切换显示 / 颜色 / 组合帮助 |
+
+手牌和玩家编号都从 **1** 开始，手牌编号以当前屏幕为准。
+拆弹放回位置从 **0**（牌顶）到当前牌堆张数（牌底）。手牌过多时用
+PgUp/PgDn 翻页。Ctrl+B 隐藏牌桌；Esc 清除输入，再按 Esc 按平台流程退房。
+显示和颜色继承 Settings，游戏内修改不会被下一帧覆盖。
+
+三张组合可指定的牌名与屏幕一致：`defuse`、`attack`、`skip`、`favor`、
+`shuffle`、`see_the_future`、`nope`、`taco_cat`、`cattermelon`、
+`hairy_potato_cat`、`beard_cat`、`rainbow_cat`、`exploding_kitten`。
+
+功能牌及组合进入共享 **5 秒**反制窗口；所有存活玩家 `pass` 可提前结算。
+每张 Nope 重开窗口，奇数次取消、偶数次恢复效果。超时等同于其余玩家放弃，
+不会自动消耗他们的 Nope。交牌和拆弹使用平台现有回合超时与掉线托管机制。
+机器人仅使用自己的观察视图，策略为保底版本，不会主动使用 Nope。
+牌堆顺序、其他人的手牌、预知结果和拆弹放回位置不会发送给无权查看的人。
+
+当前不提供 PT 奖励、扩展牌或网页牌桌。极简和丰富模式共用命令式交互，
+尚未做 UNO 式卡牌选择器。
