@@ -92,6 +92,14 @@ type Model struct {
 	turnFlowTicks    int
 	turnTickPending  bool
 	turnOffset       int
+	// tape 是 TURN 行那条"座位队列"的缓存：回合一变就重建一次，
+	// 之后每帧只做字符串切片。以前每帧都重新居中+补齐，名字看着会抖。
+	tape     string
+	tapeKey  string
+	tapeSlot int
+	// slideSeats 是"这次换人要滑几个座位"。列数要等渲染时知道槽宽才能算，
+	// 所以这里先记座位数，turnMarquee 第一帧再换算成 turnOffset。
+	slideSeats int
 }
 
 // NewModel 创建界面模型。
@@ -183,14 +191,21 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.turnTickPending = false
 			if m.turnAnimationVisible() {
 				m.turnFlowTicks++
-				if m.turnFlowTicks == 10 {
+				if m.turnFlowTicks == 12 { // 16ms × 12 ≈ 192ms，和原来的 200ms 一致
+
 					m.turnFrame = (m.turnFrame + 1) % 3
 					m.turnFlowTicks = 0
 				}
-				if m.turnOffset > 0 {
+				// 一帧走 1 列，靠"帧多"来顺：12 列 = 12 帧 × 30ms ≈ 360ms。
+				// 之前一帧 3 列是把帧数压少了——不抖是因为缓存了 tape，
+				// 但 80ms 滑完实在太快，眼睛跟不上。
+				switch {
+				case m.turnOffset > 1:
 					m.turnOffset--
-				} else if m.turnOffset < 0 {
+				case m.turnOffset < -1:
 					m.turnOffset++
+				default:
+					m.turnOffset = 0
 				}
 			}
 		}
@@ -241,11 +256,15 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	// 键位一览：只认关闭键，免得看着帮助时误触出牌
+	// 键位一览：只认关闭键，免得看着帮助时误触出牌。
+	// ? 和 / 都能开关——有人习惯按 /（斜杠键位置更顺手）。
 	if m.help {
 		switch key {
-		case "?", "esc", "q":
+		case "?", "/", "esc":
 			m.help = false
+		case "q":
+			// 老板键在帮助界面里照样有效，不能因为看着帮助就失联
+			return m.quit()
 		}
 		return nil
 	}
@@ -318,7 +337,7 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	}
 
 	switch key {
-	case "?":
+	case "?", "/":
 		m.help = true
 		return nil
 	case "q":

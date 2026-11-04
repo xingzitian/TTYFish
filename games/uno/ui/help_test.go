@@ -37,6 +37,26 @@ func TestHelpOpensAndCloses(t *testing.T) {
 	}
 }
 
+// TestSlashAlsoOpensHelp 斜杠键也要能呼出帮助（有人手更习惯按 /）。
+func TestSlashAlsoOpensHelp(t *testing.T) {
+	for _, minimal := range []bool{false, true} {
+		m := playingState(minimal).modelWith(t)
+
+		m.handleKey(keyOf("/"))
+		if !m.help {
+			t.Fatalf("[%s] / 应该能打开帮助", modeName(minimal))
+		}
+		if view := strip(m.View()); !strings.Contains(view, "键位一览") {
+			t.Fatalf("[%s] 帮助没画出来：\n%s", modeName(minimal), view)
+		}
+
+		m.handleKey(keyOf("/"))
+		if m.help {
+			t.Fatalf("[%s] 再按 / 应该关闭", modeName(minimal))
+		}
+	}
+}
+
 // TestHelpSwallowsGameKeys 看帮助时按出牌键不能真的出牌——最怕误触。
 func TestHelpSwallowsGameKeys(t *testing.T) {
 	for _, minimal := range []bool{false, true} {

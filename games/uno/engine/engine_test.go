@@ -284,9 +284,10 @@ func TestDrawAndPlayDrawnCard(t *testing.T) {
 		t.Fatalf("摸到能出的牌应当留在自己回合，实际 Turn=%d DrawnID=%d", s.Turn, s.DrawnID)
 	}
 
-	// 此时只能出摸到的那张。
+	// 手里那张（蓝 9）本来就不能出，摸完依然不能出——
+	// 注意这不是"摸过牌"带来的限制，而是牌本身不合规。
 	if err := Apply(s, PlayCard{Seat: 0, CardID: 10}); err != ErrIllegal {
-		t.Fatalf("摸牌后只能出摸到的那张，实际 %v", err)
+		t.Fatalf("不合规的牌在任何时候都该被拒，实际 %v", err)
 	}
 	mustApply(t, s, PlayCard{Seat: 0, CardID: 100})
 	if s.Turn != 1 || s.DrawnID != -1 {

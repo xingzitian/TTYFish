@@ -103,9 +103,8 @@ func LegalMoves(s *State, seat int) []Action {
 
 	var out []Action
 	for _, c := range s.Hands[seat] {
-		if s.DrawnID >= 0 && c.ID != s.DrawnID {
-			continue // 摸过牌之后只能出摸到的那张
-		}
+		// 摸过牌之后不再限制出哪张：能出就行。
+		// 以前只放行摸到的那张，玩家摸完就打不了手里原有的牌了。
 		if !s.Playable(c) {
 			continue
 		}

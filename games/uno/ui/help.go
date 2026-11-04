@@ -42,7 +42,7 @@ func (m *Model) keyHelp() []helpGroup {
 			{"Q", "断开连接"},
 		},
 	}
-	closeGroup := helpGroup{Title: "帮助", Keys: []helpKey{{"?", "关闭"}, {"Esc", "关闭"}}}
+	closeGroup := helpGroup{Title: "帮助", Keys: []helpKey{{"?", "关闭"}, {"/", "关闭"}, {"Esc", "关闭"}}}
 
 	if m.snap.Phase != client.Playing {
 		keys := []helpKey{}
@@ -82,7 +82,7 @@ func (m *Model) viewHelp() string {
 	groups := m.keyHelp()
 
 	title := m.turn().Render("[KEY] 键位一览")
-	hint := m.dim().Render("按 ? 或 Esc 关闭")
+	hint := m.dim().Render("按 ? / 或 Esc 关闭")
 	head := title
 	if pad := m.width - lipgloss.Width("[KEY] 键位一览") - lipgloss.Width(hint); pad > 0 {
 		head += strings.Repeat(" ", pad) + hint

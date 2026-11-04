@@ -172,10 +172,6 @@ func (s *State) play(v PlayCard) error {
 	if idx < 0 {
 		return ErrNoCard
 	}
-	// 刚摸起来的那张只能出它自己，不能换别的牌出。
-	if s.DrawnID >= 0 && v.CardID != s.DrawnID {
-		return ErrIllegal
-	}
 
 	c := s.Hands[v.Seat][idx]
 	if !s.Playable(c) {
@@ -308,7 +304,8 @@ func (s *State) draw(v DrawCard) error {
 	s.UnoCalled[v.Seat] = false
 	s.logf(v.Seat, "摸了一张牌")
 
-	// 摸起来的牌能出就给出牌机会；官方规则不允许改出别的牌。
+	// 摸起来的牌能出就留给自己一次出牌机会。
+	// "出牌机会"指这一回合还能动，不限制具体出哪张：手上其他能出的牌照样能打。
 	if !s.Rules.StrictDraw && s.Playable(c) {
 		s.DrawnID = c.ID
 		return nil

@@ -19,6 +19,9 @@ import (
 const (
 	compactPageSize = 5
 	playerPanelTTL  = 5 * time.Second
+	// minTurnSlot 是"值得画三个座位"的最小格宽：再窄放不下"名字+牌数"，
+	// 三个名字会互相切碎，不如只显示当前玩家。
+	minTurnSlot = 9
 )
 
 // hidePlayersMsg 是玩家面板到点自动收回的定时消息。
@@ -37,7 +40,10 @@ func (m *Model) animateTurn() tea.Cmd {
 		return nil
 	}
 	m.turnTickPending = true
-	return tea.Tick(20*time.Millisecond, func(time.Time) tea.Msg {
+	// 16ms 一帧（≈60fps）：帧率高才不会看出"一格格跳"。
+	// 动作快慢靠"总共多少帧"控制，而不是把每帧拉长——拉长就是掉帧，
+	// 终端里看起来就是卡顿。
+	return tea.Tick(16*time.Millisecond, func(time.Time) tea.Msg {
 		return turnTickMsg{model: m}
 	})
 }
@@ -170,7 +176,7 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 			m.opts.SetMode(m.id.Key, m.mode)
 		}
 		return nil
-	case "?":
+	case "?", "/":
 		m.help = !m.help
 		return nil
 	case "i":
@@ -434,60 +440,98 @@ func (m *Model) updateTurnOffset(previous client.Snapshot) {
 		previous.Phase != client.Playing || m.snap.Phase != client.Playing ||
 		!ok || len(old.HandCounts) != len(obs.HandCounts) {
 		m.turnOffset = 0
+		m.slideSeats = 0
 		return
 	}
 	if old.Turn == obs.Turn {
 		return
 	}
-	tape, centers := m.turnTape(obs)
-	if old.Turn < 0 || old.Turn >= len(centers) || obs.Turn < 0 || obs.Turn >= len(centers) {
-		m.turnOffset = 0
-		return
+
+	// 记"滑几个座位"，列数交给 turnMarquee（那时才知道槽宽）。
+	// 方向决定正负：视窗往前挪，画面里的名字就往后退。
+	delta := old.Turn - obs.Turn
+	seats := len(obs.HandCounts)
+	if seats > 0 {
+		half := seats / 2
+		switch {
+		case delta > half:
+			delta -= seats
+		case delta < -half:
+			delta += seats
+		}
 	}
-	distance := centers[old.Turn] - centers[obs.Turn]
-	if obs.Dir < 0 && distance > 0 {
-		distance -= lipgloss.Width(tape)
-	} else if obs.Dir >= 0 && distance < 0 {
-		distance += lipgloss.Width(tape)
-	}
-	m.turnOffset = distance
-	if m.turnOffset > 12 {
-		m.turnOffset = 12
-	} else if m.turnOffset < -12 {
-		m.turnOffset = -12
-	}
+	m.slideSeats = delta
+	m.turnOffset = 0
 }
 
+// turnMarquee 把"座位队列"画成一条固定座次的长带子，只移动视窗。
+//
+// 关键设计：队列的顺序**只跟座位号有关**，跟轮到谁无关。
+// 换人时不重新排版，只是把视窗从旧位置滑到新位置——
+// 这样每个名字都是"连续滑过去"，而不是瞬间换位再补一个入场动画。
 func (m *Model) turnMarquee(obs engine.Observation, width int) string {
 	seats := len(obs.HandCounts)
 	if seats == 0 || width < 3 || obs.Turn < 0 || obs.Turn >= seats {
 		return ""
 	}
 	slot := width / 3
-	offset := m.turnOffset
-	// 新快照到达时最多滑动一个玩家位，避免机器人连续出牌积压动画。
-	if offset > slot {
-		offset = slot
-	} else if offset < -slot {
-		offset = -slot
+	winW := slot * 3
+
+	// 格子窄到放不下"名字+牌数"时，三个名字只会互相切碎：
+	//   [TURN] (7)**((5)  →[>  ]
+	// 这时候只显示当前玩家，信息少一点但至少看得懂。
+	if slot < minTurnSlot {
+		return ui.PadRight(m.turn().Render(m.turnBadge(obs, obs.Turn, width)), width)
 	}
-	parts := make([]string, 0, 3)
-	for i := -1; i <= 1; i++ {
-		seat := (obs.Turn - i + seats) % seats
-		badge := ""
-		if seats > 2 || i >= 0 {
-			badge = m.turnBadge(obs, seat, slot-1)
-		}
-		badge = ansi.Truncate(badge, slot, "")
-		padding := (slot - lipgloss.Width(badge)) / 2
-		parts = append(parts, ui.PadRight(strings.Repeat(" ", padding)+badge, slot))
+
+	m.ensureTape(obs, slot, width)
+
+	// 换人后的第一帧：把"要滑几个座位"换算成列数。
+	if m.slideSeats != 0 {
+		m.turnOffset = m.slideSeats * slot
+		m.slideSeats = 0
 	}
-	tape := strings.Join(parts, "")
-	space := strings.Repeat(" ", width)
-	start := width + offset
-	window := ansi.Truncate(ansi.Cut(space+tape+space, start, start+width), width, "")
-	return ui.PadRight(window, width)
+
+	// 静止时视窗正好扣住"前一位/当前/后一位"三格；
+	// 滑动时在此基础上加偏移，于是名字是连续平移，不是重新排版。
+	tapeW := slot * seats
+	start := (obs.Turn-1)*slot + m.turnOffset
+	start = ((start % tapeW) + tapeW) % tapeW
+
+	window := ansi.Cut(m.tape+m.tape, start, start+winW)
+	return ui.PadRight(ansi.Truncate(window, winW, ""), width)
 }
+
+// ensureTape 重建队列缓存。只有座位数、手牌数、UNO 标记或槽宽变化才重建——
+// 回合变化不触发重建，不然名字会"瞬间换位"。
+func (m *Model) ensureTape(obs engine.Observation, slot, width int) {
+	key := fmt.Sprintf("%d|%d|%v|%v", len(obs.HandCounts), slot, obs.HandCounts, obs.UnoCalled)
+	if key == m.tapeKey {
+		return
+	}
+	seats := len(obs.HandCounts)
+	parts := make([]string, 0, seats)
+	for seat := 0; seat < seats; seat++ {
+		badge := m.turnBadge(obs, seat, slot)
+		badge = ansi.Truncate(badge, slot, "")
+		pad := (slot - lipgloss.Width(badge)) / 2
+		if pad < 0 {
+			pad = 0
+		}
+		parts = append(parts, ui.PadRight(strings.Repeat(" ", pad)+badge, slot))
+	}
+	m.tape = strings.Join(parts, "")
+	m.tapeSlot = slot
+	m.tapeKey = key
+}
+
+// turnMarquee 画出"当前玩家居中"的三格窗口。
+//
+// 关键点：三格内容只在回合/手牌数变化时重建一次（buildTurnTape），
+// 之后每帧只做字符串切片平移。以前每帧都重新居中、重新补齐，
+// 名字被一格一格重排，看起来就是"消失又重绘"的闪烁。
+
+// buildTurnTape 把前中后三个座位拍成一条固定宽度的带子。
 
 func (m *Model) turnBadge(obs engine.Observation, seat, width int) string {
 	count := fmt.Sprintf("(%d)", obs.HandCounts[seat])
@@ -527,7 +571,13 @@ func (m *Model) compactTurn(obs engine.Observation) string {
 
 	width := m.width - lipgloss.Width("[TURN] "+tail)
 	if width < 24 {
+		// 先砍掉"方向"两个字，只留箭头和流动条
 		tail = " " + arrow + m.turnFlow(obs.Dir)
+		width = m.width - lipgloss.Width("[TURN] "+tail)
+	}
+	if width < 14 {
+		// 再窄就把流动条也去掉：箭头动一下够了，名字比动画重要
+		tail = " " + arrow
 		width = m.width - lipgloss.Width("[TURN] "+tail)
 	}
 	if width < 30 {
@@ -660,7 +710,7 @@ func (m *Model) compactCmd(obs engine.Observation) string {
 		return m.warn().Render("[CMD] 选颜色 [1]红 [2]黄 [3]蓝 [4]绿  (Esc 取消)")
 	}
 
-	items := []string{"[?]帮助", "[1-5]出牌", "[U]UNO", "[D]摸牌", "[C]抓包", "[T]聊天", "[Tab]玩家", "[-=]翻页", "[I]界面"}
+	items := []string{"[?]帮助", "[1-5]出牌", "[U]UNO", "[D]摸牌", "[P]过", "[C]抓包", "[T]聊天", "[Tab]玩家", "[-=]翻页", "[I]界面"}
 	if obs.DrawnID >= 0 {
 		items = append(items, "[P]过牌")
 	}

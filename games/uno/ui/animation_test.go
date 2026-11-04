@@ -69,7 +69,8 @@ func TestTurnFlowAtRightOfPlayers(t *testing.T) {
 }
 
 func TestTurnShowsThreeCompleteBadges(t *testing.T) {
-	for _, width := range []int{40, 60, 80, 120} {
+	// 宽屏：三个座位都要完整。
+	for _, width := range []int{60, 80, 120} {
 		m := testModel(t, width, sampleSnap(20241029))
 		m.minimal = true
 		m.renderer = NewRenderer(io.Discard, "xterm-256color")
@@ -84,6 +85,27 @@ func TestTurnShowsThreeCompleteBadges(t *testing.T) {
 		}
 		if !strings.Contains(line, "\x1b[") || !strings.Contains(line, "226") {
 			t.Fatalf("current player must use yellow: %q", line)
+		}
+	}
+}
+
+// TestTurnDegradesOnNarrowScreen 太窄的时候只显示当前玩家，
+// 而不是把三个名字切成 "(7)**((5)" 这种谁也看不懂的东西。
+func TestTurnDegradesOnNarrowScreen(t *testing.T) {
+	for _, width := range []int{24, 30, 40} {
+		m := testModel(t, width, sampleSnap(20241029))
+		m.minimal = true
+		m.renderer = NewRenderer(io.Discard, "xterm-256color")
+		setObs(&m.snap, func(o *engine.Observation) {
+			o.Turn = 1
+			o.HandCounts = []int{7, 6, 5, 4}
+		})
+		plain := strip(m.compactTurn(m.obs()))
+		if strings.Count(plain, "(") != 1 {
+			t.Fatalf("width=%d 窄屏应该只显示当前玩家，实际 %q", width, plain)
+		}
+		if !strings.Contains(plain, "电脑A") {
+			t.Fatalf("width=%d 应该显示当前玩家的名字，实际 %q", width, plain)
 		}
 	}
 }
@@ -123,13 +145,18 @@ func TestTurnMarqueeSlidesAndCenters(t *testing.T) {
 			}
 		})
 		_, _ = m.Update(snapMsg(next))
-		if m.turnOffset*dir <= 0 {
-			t.Fatalf("dir=%d wrong scroll offset %d", dir, m.turnOffset)
+		// 换人时只记"滑几个座位"，列数等渲染时按槽宽换算
+		if m.slideSeats*dir >= 0 {
+			t.Fatalf("dir=%d 应该往回转一个座位，实际 slideSeats=%d", dir, m.slideSeats)
 		}
 		before := strip(m.turnMarquee(m.obs(), 60))
 		offset := m.turnOffset
+		if offset == 0 {
+			t.Fatal("第一帧就应该有偏移，否则看起来是瞬移")
+		}
 		_, _ = m.Update(turnTickMsg{model: m})
-		if m.turnOffset != offset-dir {
+		// 一帧一格，朝 0 收敛
+		if m.turnOffset != offset+dir {
 			t.Fatalf("must move one cell per tick: %d -> %d", offset, m.turnOffset)
 		}
 		if after := strip(m.turnMarquee(m.obs(), 60)); after == before {
@@ -168,7 +195,7 @@ func TestTurnAnimationTickLifecycle(t *testing.T) {
 	}
 	for i := 1; i <= 30; i++ {
 		_, next := m.Update(turnTickMsg{model: m})
-		if m.turnFrame != (i/10)%3 || next == nil || !m.turnTickPending {
+		if m.turnFrame != (i/12)%3 || next == nil || !m.turnTickPending {
 			t.Fatalf("tick %d did not advance and reschedule", i)
 		}
 	}
@@ -194,10 +221,12 @@ func TestTurnQueueMovesFasterThanDirectionArrow(t *testing.T) {
 	m.minimal = true
 	m.turnOffset = 12
 	_ = m.Init()
+	// 12 格 = 12 帧，全程约 360ms；箭头 12 帧一换，队列走完时箭头刚换到第二帧。
 	for i := 1; i <= 12; i++ {
 		_, _ = m.Update(turnTickMsg{model: m})
-		if m.turnOffset != 12-i || m.turnFrame != i/10 {
-			t.Fatalf("tick %d: queue offset=%d, arrow frame=%d", i, m.turnOffset, m.turnFrame)
+		want := 12 - i
+		if m.turnOffset != want || m.turnFrame != i/12 {
+			t.Fatalf("tick %d: queue offset=%d（期望 %d）, arrow frame=%d", i, m.turnOffset, want, m.turnFrame)
 		}
 	}
 }
