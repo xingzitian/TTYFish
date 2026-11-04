@@ -103,11 +103,11 @@ func TestPrivateFutureAndBossScreen(t *testing.T) {
 	c := &fakeClient{snap: client.Snapshot{Code: "ABC234", Phase: client.Playing, MySeat: 0,
 		View: engine.Observe(s, 0)}}
 	m := NewModel(c, Options{Mode: ui.ColorNone}, nil)
-	if !strings.Contains(m.View(), "exploding_kitten") {
+	if !strings.Contains(m.View(), "仅你可见，牌顶起: 爆炸猫") {
 		t.Fatal("private peek not rendered")
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
-	if strings.Contains(m.View(), "exploding_kitten") || strings.Contains(m.View(), "ABC234") {
+	if strings.Contains(m.View(), "爆炸猫") || strings.Contains(m.View(), "ABC234") {
 		t.Fatal("boss screen exposed game")
 	}
 	m.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
@@ -130,13 +130,13 @@ func TestColorPreferenceAndPagedHand(t *testing.T) {
 		t.Fatal("color preference required a layout callback")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
-	if !strings.Contains(m.View(), "PgUp/PgDn") || strings.Contains(m.View(), "40.hairy_potato_cat") {
+	if !strings.Contains(m.View(), "PgUp/PgDn") || strings.Contains(m.View(), "40.毛茸茸土豆猫") {
 		t.Fatal("large hand was not paged")
 	}
 	for range 50 {
 		m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
 	}
-	if !strings.Contains(m.View(), "40.hairy_potato_cat") {
+	if !strings.Contains(m.View(), "40.毛茸茸土豆猫") {
 		t.Fatal("last hand card inaccessible")
 	}
 	// Close must not leave the room; fakeClient's inherited Leave would panic.

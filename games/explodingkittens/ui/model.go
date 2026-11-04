@@ -261,7 +261,11 @@ func parseCommand(fields []string, o engine.Observation) (engine.Action, error) 
 		case "pair", "triple":
 			a.Target, err = target(fields[1+cardCount])
 			if fields[0] == "triple" {
-				a.Requested = engine.Kind(fields[len(fields)-1])
+				var ok bool
+				a.Requested, ok = engine.ParseKind(fields[len(fields)-1])
+				if !ok {
+					return a, fmt.Errorf("未知牌名，可输入中文牌名或原英文标识")
+				}
 			}
 		case "defuse":
 			a.Position, err = strconv.Atoi(fields[2])
@@ -292,7 +296,7 @@ func (m *Model) View() string {
 			title = title.Background(lipgloss.Color("235"))
 		}
 	}
-	lines := []string{title.Render(fmt.Sprintf("Exploding Kittens  房间 %s", m.snap.Code))}
+	lines := []string{title.Render(fmt.Sprintf("爆炸猫  房间 %s", m.snap.Code))}
 	o, playing := m.snap.View.(engine.Observation)
 	var players []string
 	for seat, p := range m.snap.Players {
@@ -313,13 +317,13 @@ func (m *Model) View() string {
 	lines = append(lines, ui.JoinWrapped(players, m.width))
 	if playing && m.snap.Phase == client.Playing {
 		lines = append(lines, fmt.Sprintf("回合 P%d · 剩余 %d 回合 · 牌堆 %d · %s",
-			o.Turn+1, o.TurnsRemaining, o.DeckCount, o.Phase))
+			o.Turn+1, o.TurnsRemaining, o.DeckCount, phaseName(o.Phase)))
 		if m.snap.MySeat >= 0 && m.snap.MySeat < len(o.Alive) && !o.Alive[m.snap.MySeat] {
 			lines = append(lines, "你已淘汰，可观战或 Esc 离开。")
 		} else {
 			var hand []string
 			for i, card := range o.Hand {
-				hand = append(hand, fmt.Sprintf("%d.%s", i+1, card.Kind))
+				hand = append(hand, fmt.Sprintf("%d.%s", i+1, card.Kind.Name()))
 			}
 			rows := strings.Split(ui.JoinWrapped(hand, m.width), "\n")
 			pageSize := max(1, m.height-16)
@@ -334,7 +338,7 @@ func (m *Model) View() string {
 		if len(o.Future) > 0 {
 			var future []string
 			for _, card := range o.Future {
-				future = append(future, string(card.Kind))
+				future = append(future, card.Kind.Name())
 			}
 			lines = append(lines, "仅你可见，牌顶起: "+strings.Join(future, " / "))
 		}
@@ -342,7 +346,7 @@ func (m *Model) View() string {
 		case engine.Responding:
 			if o.Pending != nil {
 				a := o.Pending.Action
-				desc := fmt.Sprintf("P%d: %s", a.Seat+1, o.Pending.Kind)
+				desc := fmt.Sprintf("P%d: %s", a.Seat+1, o.Pending.Kind.Name())
 				if len(a.CardIDs) > 1 {
 					desc += fmt.Sprintf(" · %d张组合", len(a.CardIDs))
 				}
@@ -350,9 +354,9 @@ func (m *Model) View() string {
 					desc += fmt.Sprintf(" → P%d", a.Target+1)
 				}
 				if a.Requested != "" {
-					desc += " 索要 " + string(a.Requested)
+					desc += " 索要 " + a.Requested.Name()
 				}
-				lines = append(lines, desc, fmt.Sprintf("Nope %d次 · 每次反制后有5秒响应窗口", o.Pending.Nopes))
+				lines = append(lines, desc, fmt.Sprintf("反制 %d次 · 每次反制后有5秒响应窗口", o.Pending.Nopes))
 			}
 			lines = append(lines, "nope 手牌号  /  pass 放弃反制（回车确认）")
 		case engine.Giving:
@@ -362,7 +366,7 @@ func (m *Model) View() string {
 		default:
 			lines = append(lines, "draw 摸牌结束 / play 手牌号 [目标座位]")
 			if m.opts.Layout != ui.LayoutCompact || m.help {
-				lines = append(lines, "pair 牌号 牌号 目标 / triple 牌号 牌号 牌号 目标 英文牌名")
+				lines = append(lines, "pair 牌号 牌号 目标 / triple 牌号 牌号 牌号 目标 牌名")
 			}
 		}
 	} else {
@@ -389,3 +393,20 @@ func (m *Model) View() string {
 }
 
 var _ tea.Model = (*Model)(nil)
+
+func phaseName(phase engine.Phase) string {
+	switch phase {
+	case engine.Playing:
+		return "出牌中"
+	case engine.Responding:
+		return "等待反制"
+	case engine.Giving:
+		return "等待交牌"
+	case engine.Reinserting:
+		return "等待拆弹放回"
+	case engine.Finished:
+		return "已结束"
+	default:
+		return "未知阶段"
+	}
+}

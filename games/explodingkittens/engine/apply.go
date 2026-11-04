@@ -30,11 +30,11 @@ type Action struct {
 }
 
 var (
-	ErrPhase  = errors.New("action unavailable in this phase")
-	ErrSeat   = errors.New("player cannot act now")
-	ErrCard   = errors.New("invalid or unavailable cards")
-	ErrTarget = errors.New("invalid target")
-	ErrChoice = errors.New("invalid choice")
+	ErrPhase  = errors.New("当前阶段不能执行此操作")
+	ErrSeat   = errors.New("现在还不能由你行动")
+	ErrCard   = errors.New("所选手牌无效或不能这样出牌")
+	ErrTarget = errors.New("目标玩家无效或没有手牌")
+	ErrChoice = errors.New("选择无效")
 )
 
 // Apply validates before mutating; rejected actions leave State unchanged.
@@ -58,32 +58,32 @@ func Apply(s *State, a Action) error {
 	text := ""
 	switch a.Type {
 	case Draw:
-		text = "drew a card"
+		text = "摸了一张牌"
 		if !s.Alive[a.Seat] {
-			text = "exploded and was eliminated"
+			text = "被爆炸猫炸中，已淘汰"
 		} else if s.Phase == Reinserting {
-			text = "drew an Exploding Kitten; must defuse"
+			text = "摸到爆炸猫，等待拆弹"
 		}
 	case Play:
-		text = fmt.Sprintf("played %s", kind)
+		text = "打出" + kind.Name()
 		if len(a.CardIDs) > 1 {
-			text += fmt.Sprintf(" x%d", len(a.CardIDs))
+			text += fmt.Sprintf(" ×%d", len(a.CardIDs))
 		}
 		if len(a.CardIDs) > 1 || kind == Favor {
-			text += fmt.Sprintf(" targeting P%d", a.Target+1)
+			text += fmt.Sprintf("，目标为 P%d", a.Target+1)
 		}
 		if len(a.CardIDs) == 3 {
-			text += " requesting " + string(a.Requested)
+			text += "，索要" + a.Requested.Name()
 		}
 	case PlayNope:
-		text = "played Nope"
+		text = "打出反制"
 	case Give:
-		text = "gave a card"
+		text = "交出了一张牌"
 	case UseDefuse:
-		text = "defused and secretly reinserted the kitten"
+		text = "完成拆弹，已秘密放回爆炸猫"
 	case Pass:
 		if oldPhase == Responding && s.Phase != Responding {
-			text = "response window closed"
+			text = "反制窗口结束"
 		}
 	}
 	if text != "" {

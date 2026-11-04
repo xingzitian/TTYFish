@@ -13,7 +13,7 @@ const ID = "exploding-kittens"
 
 type Game struct{}
 
-func (Game) Name() string     { return "Exploding Kittens" }
+func (Game) Name() string     { return "爆炸猫" }
 func (Game) MinSeats() int    { return 2 }
 func (Game) MaxSeats() int    { return 5 }
 func (Game) MatchTarget() int { return 0 }
