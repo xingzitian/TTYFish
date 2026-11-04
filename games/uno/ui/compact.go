@@ -24,6 +24,36 @@ const (
 // hidePlayersMsg 是玩家面板到点自动收回的定时消息。
 type hidePlayersMsg struct{}
 
+type turnTickMsg struct{ model *Model }
+
+func (m *Model) turnAnimationVisible() bool {
+	return m.minimal && !m.entering && !m.needLayoutChoice && !m.boss &&
+		!m.closed && !m.kicked && !m.quitting && m.snap.Code != "" &&
+		m.snap.Phase == client.Playing && m.obs().Phase == engine.Playing
+}
+
+func (m *Model) animateTurn() tea.Cmd {
+	if m.turnTickPending || !m.turnAnimationVisible() {
+		return nil
+	}
+	m.turnTickPending = true
+	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
+		return turnTickMsg{model: m}
+	})
+}
+
+func (m *Model) turnFlow(dir int) string {
+	frame := m.turnFrame
+	arrow := byte('>')
+	if dir < 0 {
+		frame = 2 - frame
+		arrow = '<'
+	}
+	flow := []byte("   ")
+	flow[frame] = arrow
+	return "[" + string(flow) + "]"
+}
+
 // cardRank 是排序键：颜色 → 面值 → card_id。
 //
 // 颜色顺序按玩家习惯写死成"红黄蓝绿万能"，**不能直接用引擎的枚举值**：
@@ -396,7 +426,7 @@ func (m *Model) compactTurn(obs engine.Observation) string {
 	if obs.Dir < 0 {
 		arrow = "←"
 	}
-	line := ">> " + strings.Join(parts, " -> ") + " | 方向: " + arrow
+	line := m.turnFlow(obs.Dir) + " " + strings.Join(parts, " -> ") + " | 方向: " + arrow
 
 	inWindow := false
 	for _, seat := range order {

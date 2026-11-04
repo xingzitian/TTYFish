@@ -87,6 +87,8 @@ type Model struct {
 	page             int
 	playersUntil     time.Time
 	errMsg           string
+	turnFrame        int
+	turnTickPending  bool
 }
 
 // NewModel 创建界面模型。
@@ -143,6 +145,10 @@ func (m *Model) SetSize(w, h int) {
 }
 
 func (m *Model) Init() tea.Cmd {
+	return tea.Batch(m.initRoom(), m.animateTurn())
+}
+
+func (m *Model) initRoom() tea.Cmd {
 	if m.sub != nil {
 		return waitFor(m.sub)
 	}
@@ -163,7 +169,21 @@ func waitFor(ch <-chan client.Snapshot) tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	return model, tea.Batch(cmd, m.animateTurn())
+}
+
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
+	case turnTickMsg:
+		if v.model == m && m.turnTickPending {
+			m.turnTickPending = false
+			if m.turnAnimationVisible() {
+				m.turnFrame = (m.turnFrame + 1) % 3
+			}
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		if v.Width > 0 {
 			m.width = v.Width
