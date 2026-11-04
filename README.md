@@ -174,7 +174,7 @@ bash hub/scripts/login-smoke.sh
 
 ## 发布与生产配置
 
-`.github/workflows/deploy.yml` 通过 `v*` tag 或手动触发发布，生成后端、网关、前端三个 Release 资产，由服务器脚本按“后端 → 前端 → 网关”顺序更新并检查。发布操作和回滚方式见 [部署说明](docs/DEPLOY.md)。推送普通 main 提交会触发 CI，不等于创建版本发布。
+`.github/workflows/deploy.yml` 在推送 `main` 后自动部署测试版；测试构建以 prerelease 资产供服务器下载，不创建正式版本。正式版只在 GitHub 上手动发布 Release 后构建资产，不自动部署。也可在 Actions 手动选分支、tag 或 commit 部署。详见[部署说明](docs/DEPLOY.md)。
 
 仓库记录的生产服务配置如下。systemd unit 由服务器维护，不在仓库中；调整部署时应核对服务器上的实际文件。
 

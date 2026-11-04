@@ -2,13 +2,13 @@
 
 线上：`159.75.78.7`，Debian 12，systemd 托管。
 
-## 日常发布
+## 日常测试部署
 
-```bash
-git tag v0.1.3 && git push origin v0.1.3
-```
+推送到 `main` 后，工作流会自动构建并部署。也可以在 Actions → Release & Deploy → Run workflow
+选择一个分支、tag 或 commit 手动部署。部署使用 `deploy-<commit>` 命名的 GitHub **prerelease**
+暂存构建资产供服务器下载，不会创建正式版本 Release，也不需要手动打 tag。
 
-一次发布带三样东西：
+每次构建包含三样东西：
 
 | 资产 | 内容 |
 |---|---|
@@ -16,12 +16,18 @@ git tag v0.1.3 && git push origin v0.1.3
 | `web.tar.gz` | 前端构建产物（`VITE_SSH_HOST` 在构建时注入） |
 | `hub-linux-amd64` | SSH 网关 |
 
-CI 做三件事：
+工作流会：
 
-1. 构建后端和网关，`npm ci && npm run build` 构建前端，一起发布成 GitHub Release
+1. 构建后端、网关和前端，资产存入对应 commit 的 prerelease
 2. SSH 进服务器，把 `deploy/deploy.sh` 推上去
 3. 执行 `deploy.sh <tag>`：下载三个资产 → 逐个校验 → 有人在玩记一行日志 →
    **按 后端 → 前端 → 网关 的顺序**替换并检查 → 任一步失败自动回滚
+
+## 正式版本发布
+
+只有在 GitHub 上手动创建并 **Publish release** 后，工作流才会为该正式版本构建并上传资产；
+此流程不会部署到机器。单纯推送 `v*` tag 不会创建 Release 或触发部署。正式 Release 的发布
+动作由操作者显式执行，测试部署不会将其误标为正式版本。
 
 **为什么是这个顺序**：前端要用后端的新接口，所以排后端之后；网关重启会踢掉正在
 玩的人，所以压最后。前端的健康检查是 `curl 127.0.0.1:12332/` 和 `/account` 都要 200
