@@ -5,11 +5,13 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
+	"github.com/xingzitian/TTYFish/games/uno/engine"
 	"github.com/xingzitian/TTYFish/sdk/client"
 )
 
-func TestTurnFlowDirectionAndFixedPlayers(t *testing.T) {
+func TestTurnFlowAtRightOfPlayers(t *testing.T) {
 	m := testModel(t, 80, sampleSnap(20241029))
 	m.minimal = true
 	for _, tt := range []struct {
@@ -25,14 +27,62 @@ func TestTurnFlowDirectionAndFixedPlayers(t *testing.T) {
 		for i, want := range tt.frames {
 			m.turnFrame = i
 			line := strip(m.compactTurn(obs))
-			if !strings.HasPrefix(line, "[TURN] "+want+" ") {
+			if !strings.Contains(line, "方向: ") || !strings.HasSuffix(line, want) {
 				t.Fatalf("dir=%d frame=%d: %q", tt.dir, i, line)
 			}
-			tail := strings.TrimPrefix(line, "[TURN] "+want+" ")
+			tail := strings.TrimSuffix(line, want)
 			if i > 0 && tail != players {
 				t.Fatalf("animation moved player names: %q != %q", tail, players)
 			}
 			players = tail
+		}
+	}
+}
+
+func TestTurnMarqueeSlidesAndCenters(t *testing.T) {
+	for _, dir := range []int{1, -1} {
+		snap := sampleSnap(20241029)
+		setObs(&snap, func(o *engine.Observation) { o.Turn = 0; o.Dir = dir })
+		m := testModel(t, 80, snap)
+		m.minimal = true
+		m.snap.Players[1].Name = "中文玩家"
+		next := m.snap
+		setObs(&next, func(o *engine.Observation) {
+			if dir > 0 {
+				o.Turn = 1
+			} else {
+				o.Turn = 3
+			}
+		})
+		_, _ = m.Update(snapMsg(next))
+		if m.turnOffset*dir <= 0 {
+			t.Fatalf("dir=%d wrong scroll offset %d", dir, m.turnOffset)
+		}
+		before := m.turnMarquee(m.obs(), 33)
+		offset := m.turnOffset
+		_, _ = m.Update(turnTickMsg{model: m})
+		if m.turnOffset != offset-dir {
+			t.Fatalf("must move one cell per tick: %d -> %d", offset, m.turnOffset)
+		}
+		if after := m.turnMarquee(m.obs(), 33); after == before {
+			t.Fatal("player queue did not scroll")
+		}
+		for i := 0; m.turnOffset != 0 && i < 200; i++ {
+			_, _ = m.Update(turnTickMsg{model: m})
+		}
+		tape, centers := m.turnTape(m.obs())
+		if m.turnOffset != 0 || lipgloss.Width(tape) == 0 {
+			t.Fatal("queue did not settle")
+		}
+		line := m.turnMarquee(m.obs(), 33)
+		badge := "[" + m.seatBadge(m.obs(), m.obs().Turn) + "]"
+		at := strings.Index(line, badge)
+		if at < 0 || lipgloss.Width(line[:at])+lipgloss.Width(badge)/2 != 16 {
+			t.Fatalf("current player not centered: %q (centers %v)", line, centers)
+		}
+		_, _ = m.Update(turnTickMsg{model: m})
+		if line != m.turnMarquee(m.obs(), 33) {
+			t.Fatal("settled queue must stay still")
 		}
 	}
 }
@@ -105,8 +155,25 @@ func TestTurnAnimationStopsForRichLayout(t *testing.T) {
 	if cmd != nil || m.turnTickPending {
 		t.Fatal("rich layout must not keep compact animation running")
 	}
+
 	_, cmd = m.Update(keyOf("i"))
 	if cmd == nil || !m.turnTickPending {
 		t.Fatal("switching back to compact must resume animation")
+	}
+
+}
+
+func TestTurnMarqueeFitsNarrowAndWideTerminals(t *testing.T) {
+	for _, width := range []int{40, 60, 80, 120} {
+		m := testModel(t, width, sampleSnap(20241029))
+		m.minimal = true
+		m.snap.Players[1].Name = "中文玩家"
+		for offset := -20; offset <= 20; offset++ {
+			m.turnOffset = offset
+			line := strip(m.compactTurn(m.obs()))
+			if got := lipgloss.Width(line); got != width {
+				t.Fatalf("width=%d offset=%d got=%d: %q", width, offset, got, line)
+			}
+		}
 	}
 }

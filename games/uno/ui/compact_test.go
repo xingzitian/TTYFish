@@ -147,7 +147,7 @@ func TestLayoutTogglePersists(t *testing.T) {
 	}
 }
 
-// TestCompactTurnWindow 人数超过 3 时 TURN 只显示 3 个，并在自己不在窗口里时补牌数。
+// TestCompactTurnWindow 玩家队列使用固定宽度窗口，并保留自己的牌数。
 func TestCompactTurnWindow(t *testing.T) {
 	snap := sampleSnap(20241029)
 	setObs(&snap, func(o *engine.Observation) {
@@ -169,8 +169,8 @@ func TestCompactTurnWindow(t *testing.T) {
 	if turnLine == "" {
 		t.Fatalf("没有 TURN 行：\n%s", out)
 	}
-	if strings.Count(turnLine, "张") > 4 { // 3 个人 + 自己那句
-		t.Fatalf("TURN 行显示的人太多：%q", turnLine)
+	if lipgloss.Width(turnLine) != 80 {
+		t.Fatalf("TURN 行应填满固定宽度窗口：%q", turnLine)
 	}
 	if !strings.Contains(turnLine, "你:7张") {
 		t.Fatalf("自己不在窗口里时要补一句自己的牌数：%q", turnLine)

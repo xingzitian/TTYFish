@@ -89,6 +89,7 @@ type Model struct {
 	errMsg           string
 	turnFrame        int
 	turnTickPending  bool
+	turnOffset       int
 }
 
 // NewModel 创建界面模型。
@@ -180,6 +181,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.turnTickPending = false
 			if m.turnAnimationVisible() {
 				m.turnFrame = (m.turnFrame + 1) % 3
+				if m.turnOffset > 0 {
+					m.turnOffset--
+				} else if m.turnOffset < 0 {
+					m.turnOffset++
+				}
 			}
 		}
 		return m, nil
@@ -194,7 +200,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case snapMsg:
+		previous := m.snap
 		m.snap = client.Snapshot(v)
+		m.updateTurnOffset(previous)
 		if m.snap.Kicked {
 			m.kicked = true
 		}

@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/xingzitian/TTYFish/games/uno/engine"
 	"github.com/xingzitian/TTYFish/sdk/client"
@@ -16,9 +17,8 @@ import (
 
 // 极简模式：一页 5 张手牌，玩家面板弹出后 5 秒自动收回。
 const (
-	compactPageSize  = 5
-	playerPanelTTL   = 5 * time.Second
-	compactTurnPeers = 3 // TURN 行最多显示几个玩家
+	compactPageSize = 5
+	playerPanelTTL  = 5 * time.Second
 )
 
 // hidePlayersMsg 是玩家面板到点自动收回的定时消息。
@@ -37,7 +37,7 @@ func (m *Model) animateTurn() tea.Cmd {
 		return nil
 	}
 	m.turnTickPending = true
-	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg {
+	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
 		return turnTickMsg{model: m}
 	})
 }
@@ -414,49 +414,83 @@ func (m *Model) viewCompact() string {
 	return strings.Join(lines, "\n")
 }
 
-// compactTurn 只显示以当前出牌人为圆心的 3 个人，自己不在窗口里就补一句牌数。
-func (m *Model) compactTurn(obs engine.Observation) string {
-	order := m.turnWindow(obs)
-	parts := make([]string, 0, len(order))
-	for _, seat := range order {
-		parts = append(parts, m.seatBadge(obs, seat))
+// turnTape 按固定座位顺序铺开循环队列，正向出牌时队列向右移动。
+func (m *Model) turnTape(obs engine.Observation) (string, []int) {
+	var tape strings.Builder
+	centers := make([]int, len(obs.HandCounts))
+	width := 0
+	for seat := len(obs.HandCounts) - 1; seat >= 0; seat-- {
+		badge := m.seatBadge(obs, seat)
+		if seat == obs.Turn {
+			badge = "[" + badge + "]"
+		}
+		centers[seat] = width + lipgloss.Width(badge)/2
+		tape.WriteString(badge)
+		tape.WriteString("   ")
+		width += lipgloss.Width(badge) + 3
 	}
+	return tape.String(), centers
+}
 
+func (m *Model) updateTurnOffset(previous client.Snapshot) {
+	obs := m.obs()
+	old, ok := previous.View.(engine.Observation)
+	if !m.minimal || previous.Code != m.snap.Code ||
+		previous.Phase != client.Playing || m.snap.Phase != client.Playing ||
+		!ok || len(old.HandCounts) != len(obs.HandCounts) {
+		m.turnOffset = 0
+		return
+	}
+	if old.Turn == obs.Turn {
+		return
+	}
+	tape, centers := m.turnTape(obs)
+	if old.Turn < 0 || old.Turn >= len(centers) || obs.Turn < 0 || obs.Turn >= len(centers) {
+		m.turnOffset = 0
+		return
+	}
+	distance := centers[old.Turn] - centers[obs.Turn]
+	if obs.Dir < 0 && distance > 0 {
+		distance -= lipgloss.Width(tape)
+	} else if obs.Dir >= 0 && distance < 0 {
+		distance += lipgloss.Width(tape)
+	}
+	m.turnOffset += distance
+}
+
+func (m *Model) turnMarquee(obs engine.Observation, width int) string {
+	tape, centers := m.turnTape(obs)
+	period := lipgloss.Width(tape)
+	if period == 0 || width <= 0 || obs.Turn < 0 || obs.Turn >= len(centers) {
+		return ""
+	}
+	start := (centers[obs.Turn] - width/2 + m.turnOffset) % period
+	if start < 0 {
+		start += period
+	}
+	repeated := strings.Repeat(tape, (start+width)/period+2)
+	window := ansi.Truncate(ansi.Cut(repeated, start, start+width), width, "")
+	return ui.PadRight(window, width)
+}
+
+// compactTurn 将当前出牌人居中，换人时逐格滑动整个队列。
+func (m *Model) compactTurn(obs engine.Observation) string {
 	arrow := "→"
 	if obs.Dir < 0 {
 		arrow = "←"
 	}
-	line := m.turnFlow(obs.Dir) + " " + strings.Join(parts, " -> ") + " | 方向: " + arrow
+	tail := " | 方向: " + arrow + m.turnFlow(obs.Dir)
 
-	inWindow := false
-	for _, seat := range order {
-		if seat == obs.Seat {
-			inWindow = true
-			break
-		}
-	}
-	if !inWindow {
-		line += "  ⇒ 你:" + fmt.Sprintf("%d张", len(obs.Hand))
+	if obs.Turn != obs.Seat {
+		tail += "  ⇒ 你:" + fmt.Sprintf("%d张", len(obs.Hand))
 	}
 
-	return m.turn().Render("[TURN] ") + line
-}
-
-// turnWindow 返回从当前出牌人开始的至多 3 个座位。
-func (m *Model) turnWindow(obs engine.Observation) []int {
-	seats := len(obs.HandCounts)
-	if seats == 0 {
-		return nil
+	width := m.width - lipgloss.Width("[TURN] "+tail)
+	if width < 9 {
+		tail = " " + arrow + m.turnFlow(obs.Dir)
+		width = m.width - lipgloss.Width("[TURN] "+tail)
 	}
-	out := make([]int, 0, compactTurnPeers)
-	dir := 1
-	if obs.Dir < 0 {
-		dir = -1
-	}
-	for i := 0; i < compactTurnPeers && i < seats; i++ {
-		out = append(out, ((obs.Turn+dir*i)%seats+seats)%seats)
-	}
-	return out
+	return m.turn().Render("[TURN] ") + m.turnMarquee(obs, width) + tail
 }
 
 // seatBadge 是 TURN 行里的一个人：名字(几张)，自己标"你"，只剩一张标 UNO。
@@ -646,6 +680,7 @@ func (m *Model) lastPlayer(obs engine.Observation) string {
 // 名字不能叫 chooseLayout —— view.go 里已经有一个同名方法用来选多栏布局。
 func (m *Model) applyLayout(l ui.Layout) {
 	m.minimal = l == ui.LayoutCompact
+	m.turnOffset = 0
 	m.needLayoutChoice = false
 	if m.opts.SetLayout != nil {
 		m.opts.SetLayout(m.id.Key, l)
@@ -655,6 +690,7 @@ func (m *Model) applyLayout(l ui.Layout) {
 // toggleLayout 在丰富/极简之间切换，并记住这个选择。
 func (m *Model) toggleLayout() {
 	m.minimal = !m.minimal
+	m.turnOffset = 0
 	if m.opts.SetLayout != nil {
 		l := ui.LayoutRich
 		if m.minimal {
