@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   credential_fp TEXT NOT NULL DEFAULT '',
   last_seen_at INTEGER NOT NULL DEFAULT 0,
   source_ip TEXT NOT NULL DEFAULT '',
-  user_agent TEXT NOT NULL DEFAULT ''
+  user_agent TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS sessions_account ON sessions(account_id);
 

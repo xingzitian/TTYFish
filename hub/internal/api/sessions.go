@@ -2,10 +2,13 @@ package api
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/xingzitian/TTYFish/hub/internal/account"
 )
+
+var deviceIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 func (s *Server) clientInfo(r *http.Request, gateway bool) account.ClientInfo {
 	ip, _ := s.sources.ip(r, gateway)
@@ -14,7 +17,11 @@ func (s *Server) clientInfo(r *http.Request, gateway bool) account.ClientInfo {
 	if len(agent) > 512 {
 		agent = agent[:512]
 	}
-	return account.ClientInfo{SourceIP: ip, UserAgent: string(agent)}
+	deviceID := r.Header.Get("X-Device-ID")
+	if !deviceIDPattern.MatchString(deviceID) {
+		deviceID = ""
+	}
+	return account.ClientInfo{SourceIP: ip, UserAgent: string(agent), DeviceID: deviceID}
 }
 func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.current(w, r)

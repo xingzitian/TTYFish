@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -96,6 +97,79 @@ func TestSessionActivityAndExpiry(t *testing.T) {
 	}
 	if _, ok, _ := s.SessionAccount(second); ok {
 		t.Fatal("other session survived")
+	}
+}
+
+func TestBrowserDeviceSessionsRetainTokensAndMetadata(t *testing.T) {
+	s := openTest(t)
+	a := challengeAccount(t, s)
+	device := strings.Repeat("a", 64)
+	first, err := s.NewSessionWithInfo(a.ID, "api", "password", "", time.Hour, ClientInfo{
+		SourceIP: "192.0.2.1", UserAgent: "Browser/1", DeviceID: device,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDevice, err := s.NewSessionWithInfo(a.ID, "api", "password", "", time.Hour, ClientInfo{
+		SourceIP: "192.0.2.2", UserAgent: "Browser/1", DeviceID: strings.Repeat("b", 64),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := s.NewSessionWithInfo(a.ID, "api", "ssh_challenge", "", time.Hour, ClientInfo{
+		SourceIP: "192.0.2.3", UserAgent: "Browser/2", DeviceID: device,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.SessionAccount(first); err != nil || !ok {
+		t.Fatalf("previous browser tab session was revoked: ok=%t err=%v", ok, err)
+	}
+	items, err := s.Sessions(a.ID, latest)
+	if err != nil || len(items) != 3 {
+		t.Fatalf("got %d session tokens, err=%v", len(items), err)
+	}
+	if !items[0].Current || items[0].AuthMethod != "ssh_challenge" || items[0].UserAgent != "Browser/2" || items[0].SourceIP != "192.0.2.3" {
+		t.Fatalf("latest device metadata was not selected: %+v", items[0])
+	}
+	if _, ok, err := s.SessionAccount(otherDevice); err != nil || !ok {
+		t.Fatalf("different device was revoked: ok=%t err=%v", ok, err)
+	}
+}
+
+func TestRevokeOtherSessionsPreservesCurrentBrowserAndCountsDevices(t *testing.T) {
+	s := openTest(t)
+	a := challengeAccount(t, s)
+	currentDevice := strings.Repeat("a", 64)
+	first, err := s.NewSessionWithInfo(a.ID, "api", "password", "", time.Hour, ClientInfo{DeviceID: currentDevice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameDevice, err := s.NewSessionWithInfo(a.ID, "api", "ssh_challenge", "", time.Hour, ClientInfo{DeviceID: currentDevice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDevice, err := s.NewSessionWithInfo(a.ID, "api", "password", "", time.Hour, ClientInfo{DeviceID: strings.Repeat("b", 64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := s.NewSession(a.ID, "legacy", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := s.RevokeOtherSessions(a.ID, first)
+	if err != nil || count != 2 {
+		t.Fatalf("revoked %d device groups, err=%v", count, err)
+	}
+	for _, token := range []string{first, sameDevice} {
+		if _, ok, err := s.SessionAccount(token); err != nil || !ok {
+			t.Fatalf("current browser token revoked: ok=%t err=%v", ok, err)
+		}
+	}
+	for _, token := range []string{otherDevice, legacy} {
+		if _, ok, err := s.SessionAccount(token); err != nil || ok {
+			t.Fatalf("other device token survived: ok=%t err=%v", ok, err)
+		}
 	}
 }
 

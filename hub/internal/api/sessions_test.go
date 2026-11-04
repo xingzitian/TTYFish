@@ -35,12 +35,19 @@ func currentSessionID(t *testing.T, items []account.SessionInfo) string {
 	return id
 }
 func loginWithInfo(t *testing.T, f fixture, name, remote, agent string) account.Session {
+	return loginWithDeviceInfo(t, f, name, remote, agent, "")
+}
+
+func loginWithDeviceInfo(t *testing.T, f fixture, name, remote, agent, device string) account.Session {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"username": name, "password": "test-password-123"})
 	r := httptest.NewRequest("POST", "/api/v1/auth/password", strings.NewReader(string(body)))
 	r.RemoteAddr = remote
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("User-Agent", agent)
+	if device != "" {
+		r.Header.Set("X-Device-ID", device)
+	}
 	r.Header.Set("X-Forwarded-For", "203.0.113.99")
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, r)
@@ -48,6 +55,100 @@ func loginWithInfo(t *testing.T, f fixture, name, remote, agent string) account.
 		t.Fatal(w.Code, w.Body.String())
 	}
 	return read[account.Session](t, w)
+}
+
+func TestPasswordLoginsAreUniquePerBrowserDevice(t *testing.T) {
+	f := setup(t, Config{})
+	if _, err := f.service.Register("alice", "test-password-123", ""); err != nil {
+		t.Fatal(err)
+	}
+	deviceA, deviceB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	first := loginWithDeviceInfo(t, f, "alice", "192.0.2.1:1234", "Browser A", deviceA)
+	again := loginWithDeviceInfo(t, f, "alice", "192.0.2.2:1234", "Browser A updated", deviceA)
+	f.request("GET", "/api/v1/me", first.AccessToken, nil, 200)
+	other := loginWithDeviceInfo(t, f, "alice", "192.0.2.3:1234", "Browser B", deviceB)
+	items := sessionsFor(t, f, again.AccessToken)
+	if len(items) != 2 {
+		t.Fatalf("got %d rows for two browsers", len(items))
+	}
+	byCurrent, currentCount := "", 0
+	for _, item := range items {
+		if item.Current {
+			currentCount++
+			byCurrent = item.UserAgent
+		}
+	}
+	if currentCount != 1 || byCurrent != "Browser A updated" {
+		t.Fatalf("same-device login metadata/current marker incorrect: %+v", items)
+	}
+	oldTabRows := sessionsFor(t, f, first.AccessToken)
+	sharedDeviceCurrent := false
+	for _, item := range oldTabRows {
+		if item.UserAgent == "Browser A updated" {
+			sharedDeviceCurrent = item.Current
+		}
+	}
+	if len(oldTabRows) != 2 || !sharedDeviceCurrent {
+		t.Fatalf("a current older tab should mark the shared device row current: %+v", oldTabRows)
+	}
+	f.request("GET", "/api/v1/me", other.AccessToken, nil, 200)
+
+	// Requests without a browser identity retain independent session semantics.
+	legacy1 := loginWithInfo(t, f, "alice", "192.0.2.4:1234", "CLI")
+	legacy2 := loginWithInfo(t, f, "alice", "192.0.2.4:1234", "CLI")
+	f.request("GET", "/api/v1/me", legacy1.AccessToken, nil, 200)
+	if len(sessionsFor(t, f, legacy2.AccessToken)) != 4 {
+		t.Fatal("sessions without device identifiers were merged")
+	}
+	items = sessionsFor(t, f, other.AccessToken)
+	var deviceSessionID string
+	for _, item := range items {
+		if item.UserAgent == "Browser A updated" {
+			deviceSessionID = item.ID
+		}
+	}
+	if deviceSessionID == "" {
+		t.Fatal("device session missing from list")
+	}
+	f.request("DELETE", "/api/v1/me/sessions/"+deviceSessionID, other.AccessToken, nil, 204)
+	f.request("GET", "/api/v1/me", first.AccessToken, nil, 401)
+	f.request("GET", "/api/v1/me", again.AccessToken, nil, 401)
+}
+
+func TestSSHChallengeLoginReusesBrowserSession(t *testing.T) {
+	f := setup(t, Config{GatewayToken: gatewaySecret})
+	if _, err := f.service.Register("alice", "test-password-123", ""); err != nil {
+		t.Fatal(err)
+	}
+	device := strings.Repeat("c", 64)
+	password := loginWithDeviceInfo(t, f, "alice", "192.0.2.1:1234", "Browser", device)
+	publicKey := key(t)
+	f.request("POST", "/api/v1/me/keys", password.AccessToken, map[string]string{"public_key": publicKey}, 201)
+	challenge := read[account.Challenge](t, f.request("POST", "/api/v1/auth/ssh/challenges", "", map[string]string{"username": "alice"}, 201))
+	f.request("POST", "/api/v1/internal/auth/ssh/challenges/confirm", gatewaySecret, map[string]string{
+		"username": "alice", "public_key": publicKey, "code": challenge.Code,
+	}, 204)
+
+	body, _ := json.Marshal(map[string]string{"poll_token": challenge.PollToken})
+	r := httptest.NewRequest("POST", "/api/v1/auth/ssh/challenges/poll", strings.NewReader(string(body)))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Device-ID", device)
+	r.Header.Set("User-Agent", "Browser")
+	r.RemoteAddr = "192.0.2.1:1234"
+	w := httptest.NewRecorder()
+	f.handler.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("poll: got %d: %s", w.Code, w.Body.String())
+	}
+	result := read[account.ChallengeResult](t, w)
+	if result.Session == nil {
+		t.Fatal("challenge did not issue a session")
+	}
+	f.request("GET", "/api/v1/me", password.AccessToken, nil, 200)
+	items := sessionsFor(t, f, result.Session.AccessToken)
+	if len(items) != 1 || !items[0].Current || items[0].AuthMethod != "ssh_challenge" || items[0].UserAgent != "Browser" {
+		t.Fatalf("SSH login did not stay in one browser session row: %+v", items)
+	}
 }
 
 func TestSessionListAndTargetedRevocation(t *testing.T) {

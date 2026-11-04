@@ -218,6 +218,9 @@ func TestValidationAndTransport(t *testing.T) {
 		if w.Code != tc.status {
 			t.Fatalf("%s %s: %d %s", tc.method, tc.path, w.Code, w.Body.String())
 		}
+		if tc.method == "OPTIONS" && tc.status == 204 && !strings.Contains(w.Header().Get("Access-Control-Allow-Headers"), "X-Device-ID") {
+			t.Fatal("browser device header is not allowed by CORS")
+		}
 		if tc.status != 204 && !json.Valid(w.Body.Bytes()) {
 			t.Fatal("non-JSON error")
 		}

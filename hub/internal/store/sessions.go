@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"regexp"
 	"time"
 )
 
@@ -12,7 +13,13 @@ var ErrSessionInvalid = errors.New("会话已失效")
 type ClientInfo struct {
 	SourceIP  string
 	UserAgent string
+	// DeviceID is an untrusted, browser-generated identifier used only to coalesce
+	// repeated browser logins into one revocable session.
+	DeviceID string
 }
+
+var deviceIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
 type SessionInfo struct {
 	ID                    string
 	AuthMethod            string
@@ -23,6 +30,7 @@ type SessionInfo struct {
 	SourceIP              string
 	UserAgent             string
 	Current               bool
+	DeviceID              string
 }
 
 func migrateSessions(db *sql.DB) error {
@@ -55,6 +63,7 @@ func migrateSessions(db *sql.DB) error {
 		{"session_id", `TEXT NOT NULL DEFAULT ''`}, {"auth_method", `TEXT NOT NULL DEFAULT 'unknown'`},
 		{"credential_fp", `TEXT NOT NULL DEFAULT ''`}, {"last_seen_at", `INTEGER NOT NULL DEFAULT 0`},
 		{"source_ip", `TEXT NOT NULL DEFAULT ''`}, {"user_agent", `TEXT NOT NULL DEFAULT ''`},
+		{"device_id", `TEXT NOT NULL DEFAULT ''`},
 	} {
 		if !columns[column.name] {
 			if _, err = tx.Exec("ALTER TABLE sessions ADD COLUMN " + column.name + " " + column.definition); err != nil {
@@ -102,10 +111,13 @@ type sessionWriter interface {
 }
 
 func insertSession(db sessionWriter, id, note, method, fp string, ttl time.Duration, info ClientInfo) (string, error) {
+	if info.DeviceID != "" && !deviceIDPattern.MatchString(info.DeviceID) {
+		return "", errors.New("invalid browser device identifier")
+	}
 	token := randomToken()
 	now := time.Now()
-	_, err := db.Exec(`INSERT INTO sessions(token_hash,session_id,account_id,created_at,expires_at,note,auth_method,credential_fp,last_seen_at,source_ip,user_agent)
- VALUES(?,?,?,?,?,?,?,?,?,?,?)`, hash(token), randomID(), id, now.UnixMilli(), now.Add(ttl).UnixMilli(), note, method, fp, now.UnixMilli(), info.SourceIP, info.UserAgent)
+	_, err := db.Exec(`INSERT INTO sessions(token_hash,session_id,account_id,created_at,expires_at,note,auth_method,credential_fp,last_seen_at,source_ip,user_agent,device_id)
+ VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, hash(token), randomID(), id, now.UnixMilli(), now.Add(ttl).UnixMilli(), note, method, fp, now.UnixMilli(), info.SourceIP, info.UserAgent, info.DeviceID)
 	if err != nil {
 		return "", err
 	}
@@ -131,7 +143,7 @@ func (s *Store) Sessions(id, token string) ([]SessionInfo, error) {
 	if !ok {
 		return nil, ErrSessionInvalid
 	}
-	rows, err := s.db.Query(`SELECT session_id,auth_method,credential_fp,created_at,expires_at,last_seen_at,source_ip,user_agent,token_hash=?
+	rows, err := s.db.Query(`SELECT session_id,auth_method,credential_fp,created_at,expires_at,last_seen_at,source_ip,user_agent,token_hash=?,device_id
  FROM sessions WHERE account_id=? AND expires_at>? ORDER BY created_at DESC,session_id DESC`, hash(token), id, time.Now().UnixMilli())
 	if err != nil {
 		return nil, err
@@ -141,7 +153,7 @@ func (s *Store) Sessions(id, token string) ([]SessionInfo, error) {
 	for rows.Next() {
 		var item SessionInfo
 		var created, expires, seen int64
-		if err = rows.Scan(&item.ID, &item.AuthMethod, &item.CredentialFingerprint, &created, &expires, &seen, &item.SourceIP, &item.UserAgent, &item.Current); err != nil {
+		if err = rows.Scan(&item.ID, &item.AuthMethod, &item.CredentialFingerprint, &created, &expires, &seen, &item.SourceIP, &item.UserAgent, &item.Current, &item.DeviceID); err != nil {
 			return nil, err
 		}
 		item.CreatedAt = time.UnixMilli(created)
@@ -153,8 +165,10 @@ func (s *Store) Sessions(id, token string) ([]SessionInfo, error) {
 }
 
 func (s *Store) RevokeSession(id, token, sessionID string) (bool, error) {
-	result, err := s.db.Exec(`DELETE FROM sessions WHERE account_id=? AND session_id=? AND expires_at>?
- AND EXISTS (SELECT 1 FROM sessions caller WHERE caller.account_id=? AND caller.token_hash=? AND caller.expires_at>?)`, id, sessionID, time.Now().UnixMilli(), id, hash(token), time.Now().UnixMilli())
+	now := time.Now().UnixMilli()
+	result, err := s.db.Exec(`DELETE FROM sessions WHERE account_id=? AND expires_at>?
+ AND (session_id=? OR (device_id<>'' AND device_id=(SELECT device_id FROM sessions WHERE account_id=? AND session_id=? AND device_id<>'' AND expires_at>?)))
+ AND EXISTS (SELECT 1 FROM sessions caller WHERE caller.account_id=? AND caller.token_hash=? AND caller.expires_at>?)`, id, now, sessionID, id, sessionID, now, id, hash(token), now)
 	if err != nil {
 		return false, err
 	}
@@ -184,12 +198,32 @@ func (s *Store) RevokeOtherSessions(id, token string) (int64, error) {
 	if !ok {
 		return 0, ErrSessionInvalid
 	}
-	result, err := tx.Exec(`DELETE FROM sessions WHERE account_id=? AND token_hash<>? AND expires_at>?`, id, hash(token), time.Now().UnixMilli())
+	now := time.Now().UnixMilli()
+	var deviceID string
+	if err = tx.QueryRow(`SELECT device_id FROM sessions WHERE account_id=? AND token_hash=? AND expires_at>?`, id, hash(token), now).Scan(&deviceID); err != nil {
+		return 0, err
+	}
+	var count int64
+	if deviceID != "" {
+		err = tx.QueryRow(`SELECT COUNT(DISTINCT CASE WHEN device_id='' THEN session_id ELSE device_id END)
+ FROM sessions WHERE account_id=? AND expires_at>? AND device_id<>?`, id, now, deviceID).Scan(&count)
+	} else {
+		err = tx.QueryRow(`SELECT COUNT(DISTINCT CASE WHEN device_id='' THEN session_id ELSE device_id END)
+ FROM sessions WHERE account_id=? AND expires_at>? AND token_hash<>?`, id, now, hash(token)).Scan(&count)
+	}
 	if err != nil {
 		return 0, err
 	}
-	count, err := result.RowsAffected()
+	var result sql.Result
+	if deviceID != "" {
+		result, err = tx.Exec(`DELETE FROM sessions WHERE account_id=? AND expires_at>? AND device_id<>?`, id, now, deviceID)
+	} else {
+		result, err = tx.Exec(`DELETE FROM sessions WHERE account_id=? AND expires_at>? AND token_hash<>?`, id, now, hash(token))
+	}
 	if err != nil {
+		return 0, err
+	}
+	if _, err := result.RowsAffected(); err != nil {
 		return 0, err
 	}
 	return count, tx.Commit()
@@ -216,10 +250,19 @@ func (s *Store) SetPasswordAndRevokeOthers(id, token, password string) error {
 	if !ok {
 		return ErrSessionInvalid
 	}
+	now := time.Now().UnixMilli()
+	var deviceID string
+	if err = tx.QueryRow(`SELECT device_id FROM sessions WHERE account_id=? AND token_hash=? AND expires_at>?`, id, hash(token), now).Scan(&deviceID); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(`INSERT INTO passwords(account_id,digest) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET digest=excluded.digest`, id, digest); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(`DELETE FROM sessions WHERE account_id=? AND token_hash<>?`, id, hash(token)); err != nil {
+	if deviceID != "" {
+		if _, err = tx.Exec(`DELETE FROM sessions WHERE account_id=? AND device_id<>?`, id, deviceID); err != nil {
+			return err
+		}
+	} else if _, err = tx.Exec(`DELETE FROM sessions WHERE account_id=? AND token_hash<>?`, id, hash(token)); err != nil {
 		return err
 	}
 	return tx.Commit()

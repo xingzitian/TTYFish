@@ -45,12 +45,29 @@ func (s *Service) Sessions(id, token string) ([]SessionInfo, error) {
 		return nil, sessionError(err)
 	}
 	items := make([]SessionInfo, 0, len(sessions))
+	byDevice := make(map[string]int, len(sessions))
 	for _, session := range sessions {
 		var fp *string
 		if session.CredentialFingerprint != "" {
 			v := session.CredentialFingerprint
 			fp = &v
 		}
+		key := "session:" + session.ID
+		if session.DeviceID != "" {
+			key = "device:" + session.DeviceID
+		}
+		if index, exists := byDevice[key]; exists {
+			item := &items[index]
+			item.Current = item.Current || session.Current
+			if session.LastSeenAt.After(item.LastSeenAt) {
+				item.LastSeenAt = session.LastSeenAt
+			}
+			if session.ExpiresAt.After(item.ExpiresAt) {
+				item.ExpiresAt = session.ExpiresAt
+			}
+			continue
+		}
+		byDevice[key] = len(items)
 		items = append(items, SessionInfo{session.ID, session.AuthMethod, fp, session.CreatedAt, session.ExpiresAt, session.LastSeenAt, session.SourceIP, session.UserAgent, session.Current})
 	}
 	return items, nil

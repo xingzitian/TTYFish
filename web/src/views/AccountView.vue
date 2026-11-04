@@ -149,7 +149,7 @@ async function removeKey(key: Key): Promise<void> {
 
 async function revokeOne(session: SessionInfo): Promise<void> {
   if (session.current) {
-    ElMessage.warning('这就是当前这条登录，要退出请用右上角的“退出”')
+    ElMessage.warning('这就是当前设备 / 浏览器，要退出请用右上角的“退出”')
     return
   }
   try {
@@ -164,7 +164,7 @@ async function revokeOne(session: SessionInfo): Promise<void> {
 async function revokeAllOthers(): Promise<void> {
   try {
     const { revoked_count } = await api.revokeOtherSessions()
-    ElMessage.success(revoked_count > 0 ? `已退出其他 ${revoked_count} 个登录` : '没有其他登录')
+    ElMessage.success(revoked_count > 0 ? `已退出其他 ${revoked_count} 台设备 / 浏览器` : '没有其他登录')
     await loadSessions()
   } catch (err) {
     fail(err, '操作失败')
@@ -345,7 +345,7 @@ onMounted(async () => {
       <el-card class="card" shadow="never">
         <template #header>
           <div style="display: flex; justify-content: space-between; align-items: center">
-            <strong>登录会话</strong>
+            <strong>登录设备 / 浏览器</strong>
             <div>
               <el-button text size="small" :loading="sessionsLoading" @click="loadSessions">
                 刷新
@@ -371,7 +371,7 @@ onMounted(async () => {
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="客户端" min-width="160">
+          <el-table-column label="设备 / 浏览器" min-width="160">
             <template #default="{ row }">
               <span class="hint">{{ row.user_agent || '—' }}</span>
             </template>

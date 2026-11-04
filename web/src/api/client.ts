@@ -34,6 +34,22 @@ export class ApiError extends Error {
  * localStorage 里塞东西。
  */
 let token: string | null = null
+const deviceStorageKey = 'ttyfish.device-id'
+const deviceIDPattern = /^[a-f0-9]{64}$/
+
+function browserDeviceID(): string {
+  try {
+    const stored = window.localStorage.getItem(deviceStorageKey)
+    if (stored && deviceIDPattern.test(stored)) return stored
+
+    const bytes = window.crypto.getRandomValues(new Uint8Array(32))
+    const id = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+    window.localStorage.setItem(deviceStorageKey, id)
+    return id
+  } catch {
+    throw new ApiError(0, 'device_identity_unavailable', '浏览器无法保存设备标识，请启用本地存储后重试')
+  }
+}
 
 export function setToken(next: string | null): void {
   token = next
@@ -50,6 +66,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (token) {
     headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  if (path === '/api/v1/auth/password' || path === '/api/v1/auth/ssh/challenges/poll') {
+    headers.set('X-Device-ID', browserDeviceID())
   }
 
   let res: Response

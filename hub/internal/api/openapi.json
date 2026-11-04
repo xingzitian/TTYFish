@@ -1310,6 +1310,18 @@
         "operationId": "pollSSHChallenge",
         "summary": "浏览器凭 poll_token 查询并一次性领取会话",
         "description": "浏览器至少每 1500ms 查询一次。pending 等待；ok 附带一次性 session；expired 包含不存在、过期、已领取和公钥撤销。默认同来源 1200 次/分钟，每个 poll_token 跨来源 60 次/分钟；不消耗密码登录预算。查询凭证仅放 JSON 请求体，不放 URL。",
+        "parameters": [
+          {
+            "name": "X-Device-ID",
+            "in": "header",
+            "required": false,
+            "description": "Web 浏览器配置的随机 64 位十六进制标识。提供后，同账号的再次浏览器登录会替换该设备之前的会话。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        ],
         "security": [],
         "requestBody": {
           "required": true,
@@ -1697,6 +1709,19 @@
       "post": {
         "operationId": "loginPassword",
         "summary": "用户名和密码登录",
+        "description": "Web 客户端提供 X-Device-ID 后，同一账号和浏览器配置再次登录会替换旧会话；此标识仅用于会话分组，不用于认证。",
+        "parameters": [
+          {
+            "name": "X-Device-ID",
+            "in": "header",
+            "required": false,
+            "description": "Web 浏览器配置的随机 64 位十六进制标识。",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "成功",
@@ -2303,7 +2328,7 @@
             }
           }
         },
-        "description": "省略 revoke_other_sessions 时保持现有会话；true 时原子更新密码并撤销其他会话，保留当前会话。"
+        "description": "省略 revoke_other_sessions 时保持现有会话；true 时原子更新密码并撤销其他设备的会话，保留当前浏览器设备组；没有设备标识的旧客户端仍按单个令牌处理。"
       }
     },
     "/api/v1/me/password-login": {
@@ -3006,8 +3031,8 @@
     "/api/v1/me/sessions/revoke-others": {
       "post": {
         "operationId": "revokeOtherSessions",
-        "summary": "撤销当前账号其他活跃会话，保留当前会话",
-        "description": "无需请求体。重复调用返回 revoked_count=0。仅统计实际删除的其他未过期会话，不影响其他账号。",
+        "summary": "撤销当前账号其他活跃设备，保留当前设备",
+        "description": "无需请求体。重复调用返回 revoked_count=0。设备标识相同的会话合并计数并一起撤销；没有设备标识的旧客户端按单个会话计数。保留当前浏览器设备组，不影响其他账号。",
         "responses": {
           "200": {
             "description": "撤销数量",
