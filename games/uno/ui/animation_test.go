@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"io"
 	"strings"
 	"testing"
 
@@ -39,6 +40,45 @@ func TestTurnFlowAtRightOfPlayers(t *testing.T) {
 	}
 }
 
+func TestTurnShowsThreeCompleteBadges(t *testing.T) {
+	for _, width := range []int{40, 60, 80, 120} {
+		m := testModel(t, width, sampleSnap(20241029))
+		m.minimal = true
+		m.renderer = NewRenderer(io.Discard, "xterm-256color")
+		setObs(&m.snap, func(o *engine.Observation) { o.Turn = 1 })
+		line := m.compactTurn(m.obs())
+		plain := strip(line)
+		if strings.Count(plain, "(") != 3 || strings.Count(plain, ")") != 3 {
+			t.Fatalf("width=%d must show three complete counts: %q", width, plain)
+		}
+		if strings.Contains(plain, "张") || !strings.Contains(plain, "*") {
+			t.Fatalf("unexpected active-player/count format: %q", plain)
+		}
+		if !strings.Contains(line, "\x1b[") || !strings.Contains(line, "226") {
+			t.Fatalf("current player must use yellow: %q", line)
+		}
+	}
+}
+
+func TestRapidTurnChangesDoNotAccumulateScroll(t *testing.T) {
+	m := testModel(t, 80, sampleSnap(20241029))
+	m.minimal = true
+	for i := 0; i < 20; i++ {
+		next := m.snap
+		setObs(&next, func(o *engine.Observation) { o.Turn = (o.Turn + 1) % 4 })
+		_, _ = m.Update(snapMsg(next))
+		if m.turnOffset < -12 || m.turnOffset > 12 {
+			t.Fatalf("rapid turns accumulated animation: %d", m.turnOffset)
+		}
+	}
+	for i := 0; i < 12; i++ {
+		_, _ = m.Update(turnTickMsg{model: m})
+	}
+	if m.turnOffset != 0 {
+		t.Fatal("queue must settle within 12 ticks")
+	}
+}
+
 func TestTurnMarqueeSlidesAndCenters(t *testing.T) {
 	for _, dir := range []int{1, -1} {
 		snap := sampleSnap(20241029)
@@ -58,13 +98,13 @@ func TestTurnMarqueeSlidesAndCenters(t *testing.T) {
 		if m.turnOffset*dir <= 0 {
 			t.Fatalf("dir=%d wrong scroll offset %d", dir, m.turnOffset)
 		}
-		before := m.turnMarquee(m.obs(), 33)
+		before := strip(m.turnMarquee(m.obs(), 60))
 		offset := m.turnOffset
 		_, _ = m.Update(turnTickMsg{model: m})
 		if m.turnOffset != offset-dir {
 			t.Fatalf("must move one cell per tick: %d -> %d", offset, m.turnOffset)
 		}
-		if after := m.turnMarquee(m.obs(), 33); after == before {
+		if after := strip(m.turnMarquee(m.obs(), 60)); after == before {
 			t.Fatal("player queue did not scroll")
 		}
 		for i := 0; m.turnOffset != 0 && i < 200; i++ {
@@ -74,14 +114,15 @@ func TestTurnMarqueeSlidesAndCenters(t *testing.T) {
 		if m.turnOffset != 0 || lipgloss.Width(tape) == 0 {
 			t.Fatal("queue did not settle")
 		}
-		line := m.turnMarquee(m.obs(), 33)
-		badge := "[" + m.seatBadge(m.obs(), m.obs().Turn) + "]"
+		line := strip(m.turnMarquee(m.obs(), 60))
+		badge := strip(m.turnBadge(m.obs(), m.obs().Turn, 19))
 		at := strings.Index(line, badge)
-		if at < 0 || lipgloss.Width(line[:at])+lipgloss.Width(badge)/2 != 16 {
+		if at < 0 || lipgloss.Width(line[:at])+lipgloss.Width(badge)/2 < 29 ||
+			lipgloss.Width(line[:at])+lipgloss.Width(badge)/2 > 30 {
 			t.Fatalf("current player not centered: %q (centers %v)", line, centers)
 		}
 		_, _ = m.Update(turnTickMsg{model: m})
-		if line != m.turnMarquee(m.obs(), 33) {
+		if line != strip(m.turnMarquee(m.obs(), 60)) {
 			t.Fatal("settled queue must stay still")
 		}
 	}

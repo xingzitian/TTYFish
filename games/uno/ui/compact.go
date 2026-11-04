@@ -37,7 +37,7 @@ func (m *Model) animateTurn() tea.Cmd {
 		return nil
 	}
 	m.turnTickPending = true
-	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg {
+	return tea.Tick(20*time.Millisecond, func(time.Time) tea.Msg {
 		return turnTickMsg{model: m}
 	})
 }
@@ -420,10 +420,7 @@ func (m *Model) turnTape(obs engine.Observation) (string, []int) {
 	centers := make([]int, len(obs.HandCounts))
 	width := 0
 	for seat := len(obs.HandCounts) - 1; seat >= 0; seat-- {
-		badge := m.seatBadge(obs, seat)
-		if seat == obs.Turn {
-			badge = "[" + badge + "]"
-		}
+		badge := m.turnBadge(obs, seat, 100)
 		centers[seat] = width + lipgloss.Width(badge)/2
 		tape.WriteString(badge)
 		tape.WriteString("   ")
@@ -455,22 +452,64 @@ func (m *Model) updateTurnOffset(previous client.Snapshot) {
 	} else if obs.Dir >= 0 && distance < 0 {
 		distance += lipgloss.Width(tape)
 	}
-	m.turnOffset += distance
+	m.turnOffset = distance
+	if m.turnOffset > 12 {
+		m.turnOffset = 12
+	} else if m.turnOffset < -12 {
+		m.turnOffset = -12
+	}
 }
 
 func (m *Model) turnMarquee(obs engine.Observation, width int) string {
-	tape, centers := m.turnTape(obs)
-	period := lipgloss.Width(tape)
-	if period == 0 || width <= 0 || obs.Turn < 0 || obs.Turn >= len(centers) {
+	seats := len(obs.HandCounts)
+	if seats == 0 || width < 3 || obs.Turn < 0 || obs.Turn >= seats {
 		return ""
 	}
-	start := (centers[obs.Turn] - width/2 + m.turnOffset) % period
-	if start < 0 {
-		start += period
+	slot := width / 3
+	offset := m.turnOffset
+	// 新快照到达时最多滑动一个玩家位，避免机器人连续出牌积压动画。
+	if offset > slot {
+		offset = slot
+	} else if offset < -slot {
+		offset = -slot
 	}
-	repeated := strings.Repeat(tape, (start+width)/period+2)
-	window := ansi.Truncate(ansi.Cut(repeated, start, start+width), width, "")
+	parts := make([]string, 0, 3)
+	for i := -1; i <= 1; i++ {
+		seat := (obs.Turn - i + seats) % seats
+		badge := ""
+		if seats > 2 || i >= 0 {
+			badge = m.turnBadge(obs, seat, slot-1)
+		}
+		badge = ansi.Truncate(badge, slot, "")
+		padding := (slot - lipgloss.Width(badge)) / 2
+		parts = append(parts, ui.PadRight(strings.Repeat(" ", padding)+badge, slot))
+	}
+	tape := strings.Join(parts, "")
+	space := strings.Repeat(" ", width)
+	start := width + offset
+	window := ansi.Truncate(ansi.Cut(space+tape+space, start, start+width), width, "")
 	return ui.PadRight(window, width)
+}
+
+func (m *Model) turnBadge(obs engine.Observation, seat, width int) string {
+	count := fmt.Sprintf("(%d)", obs.HandCounts[seat])
+	nameWidth := width - lipgloss.Width(count)
+	current := seat == obs.Turn
+	if current {
+		nameWidth -= 2
+	}
+	if nameWidth < 1 {
+		nameWidth = 1
+	}
+	name := ansi.Truncate(m.name(seat), nameWidth, "")
+	if current {
+		name = "*" + name + "*"
+	}
+	badge := name + count
+	if current {
+		return m.turn().Render(badge)
+	}
+	return badge
 }
 
 // compactTurn 将当前出牌人居中，换人时逐格滑动整个队列。
@@ -482,32 +521,15 @@ func (m *Model) compactTurn(obs engine.Observation) string {
 	tail := " | 方向: " + arrow + m.turnFlow(obs.Dir)
 
 	if obs.Turn != obs.Seat {
-		tail += "  ⇒ 你:" + fmt.Sprintf("%d张", len(obs.Hand))
+		tail += "  ⇒ 你:" + fmt.Sprintf("%d", len(obs.Hand))
 	}
 
 	width := m.width - lipgloss.Width("[TURN] "+tail)
-	if width < 9 {
+	if width < 24 {
 		tail = " " + arrow + m.turnFlow(obs.Dir)
 		width = m.width - lipgloss.Width("[TURN] "+tail)
 	}
 	return m.turn().Render("[TURN] ") + m.turnMarquee(obs, width) + tail
-}
-
-// seatBadge 是 TURN 行里的一个人：名字(几张)，自己标"你"，只剩一张标 UNO。
-func (m *Model) seatBadge(obs engine.Observation, seat int) string {
-	name := shortName(m.name(seat), 8)
-	count := 0
-	if seat >= 0 && seat < len(obs.HandCounts) {
-		count = obs.HandCounts[seat]
-	}
-	badge := name + "(" + fmt.Sprintf("%d张", count)
-	if seat == obs.Seat && name != "你" {
-		badge += " 你"
-	}
-	if count == 1 {
-		badge += " ⚠️UNO"
-	}
-	return badge + ")"
 }
 
 func (m *Model) compactPile(obs engine.Observation) string {

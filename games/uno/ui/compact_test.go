@@ -172,7 +172,7 @@ func TestCompactTurnWindow(t *testing.T) {
 	if lipgloss.Width(turnLine) != 80 {
 		t.Fatalf("TURN 行应填满固定宽度窗口：%q", turnLine)
 	}
-	if !strings.Contains(turnLine, "你:7张") {
+	if !strings.Contains(turnLine, "你:7") {
 		t.Fatalf("自己不在窗口里时要补一句自己的牌数：%q", turnLine)
 	}
 }
