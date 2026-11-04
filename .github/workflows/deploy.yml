@@ -1,159 +1,92 @@
-name: Release & Deploy
+name: Deploy
 
-# 推送 main：构建 → 发布自动生成的 prerelease 资产 → 部署。
-# 正式版只在 GitHub 上手动发布 Release 后构建并补齐资产，不触发部署。
-#
-# 为什么不是 CI 直接把 15MB 二进制 scp 过去：这条跨境链路只有几十 KB/s，
-# 传一次要十几分钟。让服务器自己从 Release 下载（走本机 mihomo）是秒级的。
-#
-# 为什么不用定时轮询：CI 已经能连上机器了，没必再多一条"谁先发现"的链路。
+# 只部署同一 main CI run 生成并验证过的产物，不重新构建、不创建 Release。
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: '要部署的分支、tag 或 commit（默认 main）'
-        required: true
-        default: main
 
 permissions:
-  contents: write # 建 release 需要
+  actions: read
+  contents: read
 
 concurrency:
-  group: deploy-release-${{ github.ref }}
+  group: deploy-main
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: 构建并 ${{ github.event_name == 'release' && '发布正式版资产' || '部署测试版' }}
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main'
+    name: 部署已通过 CI 的产物
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.ref || github.sha }}
+          ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: 解析构建版本
-        id: build
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          set -euo pipefail
-          COMMIT="$(git rev-parse HEAD)"
-          if [ -n "$RELEASE_TAG" ]; then
-            TAG="$RELEASE_TAG"
-          else
-            TAG="deploy-${COMMIT:0:12}"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-go@v5
+      - uses: actions/download-artifact@v4
         with:
-          go-version: '1.26.x'
-          cache-dependency-path: hub/go.sum
+          name: ttyfish-binaries
+          path: dist
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
 
-      # 和 ci.yml 用同一个 Node 版本，避免"CI 能过、发布时构建出别的产物"
-      - uses: actions/setup-node@v4
+      - uses: actions/download-artifact@v4
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          name: ttyfish-web
+          path: dist
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
 
-      # 两个二进制：后端（账号+房间+规则）和 SSH 网关
-      - name: 编译 linux/amd64
-        working-directory: hub
+      - name: 校验并打包 CI 产物
         env:
-          CGO_ENABLED: '0'
-          GOOS: linux
-          GOARCH: amd64
-          # 界面标题栏要显示版本号，直接写在二进制里
-          TAG: ${{ steps.build.outputs.tag }}
-        run: |
-          mkdir -p ../dist
-          go build -trimpath -ldflags "-s -w -X main.version=$TAG" -o ../dist/hub-linux-amd64 ./cmd/hub
-          go build -trimpath -ldflags "-s -w -X github.com/xingzitian/TTYFish/hub/internal/api.serverVersion=$TAG" -o ../dist/backend-linux-amd64 ./cmd/backend
-          file ../dist/hub-linux-amd64 ../dist/backend-linux-amd64
-          cd ../dist
-          sha256sum hub-linux-amd64 > hub-linux-amd64.sha256
-          sha256sum backend-linux-amd64 > backend-linux-amd64.sha256
-          cat *.sha256
-
-      # 前端：构建时把 SSH 地址写进产物（登录页那条 ssh 命令用的就是它）
-      - name: 构建前端
+          COMMIT: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          cd web
-          npm ci
-          echo "SSH 地址：$VITE_SSH_HOST:$VITE_SSH_PORT"
-          VITE_SSH_HOST="$VITE_SSH_HOST" VITE_SSH_PORT="$VITE_SSH_PORT" npm run build
-          tar -czf ../dist/web.tar.gz -C dist .
-          ls -lh ../dist/web.tar.gz
-        env:
-          VITE_SSH_HOST: ${{ vars.TTYFISH_SSH_HOST || '159.75.78.7' }}
-          VITE_SSH_PORT: ${{ vars.TTYFISH_SSH_PORT || '12331' }}
+          cd dist
+          sha256sum --check hub-linux-amd64.sha256 backend-linux-amd64.sha256
+          sha256sum --check web.tar.gz.sha256
+          tar -tzf web.tar.gz >/dev/null
+          TAG="deploy-${COMMIT:0:12}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          tar -czf "$RUNNER_TEMP/ttyfish-deploy.tar.gz" .
 
-      - name: 建 Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.build.outputs.tag }}
-          COMMIT: ${{ steps.build.outputs.commit }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-          ASSETS="dist/hub-linux-amd64 dist/hub-linux-amd64.sha256 dist/backend-linux-amd64 dist/backend-linux-amd64.sha256 dist/web.tar.gz"
-          if [ "$EVENT_NAME" = "release" ]; then
-            echo "给已手动发布的正式版补传构建资产"
-            gh release upload "$TAG" $ASSETS --clobber
-          elif gh release view "$TAG" >/dev/null 2>&1; then
-            echo "测试版 prerelease 已存在，补传资产"
-            gh release upload "$TAG" $ASSETS --clobber
-          else
-            gh release create "$TAG" $ASSETS \
-              --title "测试部署 $TAG" \
-              --notes "Automated deployment build for commit $COMMIT. This is a prerelease, not a production version release." \
-              --prerelease \
-              --target "$COMMIT"
-          fi
-
-      # 服务器侧脚本由 CI 推过去（4KB，不是 15MB），再执行。
-      # 这样服务器上不用预先装任何东西，脚本改了也跟着走。
-      - name: 部署到服务器
-        if: github.event_name != 'release'
+      - name: 部署 CI 产物
         env:
           SSH_KEY: ${{ secrets.TTYFISH_DEPLOY }}
-          TAG: ${{ steps.build.outputs.tag }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: c7271c3053a80ea7bf1206cbb25cf45e
+          R2_BUCKET: ttyfish
+          COMMIT: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-
-          # secret 里的私钥可能带着 Windows 的 \r，ssh 对此很敏感
           printf '%s' "$SSH_KEY" | tr -d '\r' > ~/.ssh/k
           printf '\n' >> ~/.ssh/k
           chmod 600 ~/.ssh/k
-          ssh-keygen -lf ~/.ssh/k
-
           ssh-keyscan -H 159.75.78.7 >> ~/.ssh/known_hosts 2>/dev/null || true
-          S="ssh -i $HOME/.ssh/k -p 22 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=20 deploy@159.75.78.7"
 
-          echo "--- 上传部署脚本 ---"
-          $S 'cat > /opt/ttyfish/deploy.sh && chmod 755 /opt/ttyfish/deploy.sh' < deploy/deploy.sh
+          SSH=(ssh -i "$HOME/.ssh/k" -p 22 -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=20 deploy@159.75.78.7)
+          ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          OBJECT_KEY="deploy/${COMMIT}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/ttyfish.tar.gz"
+          BUNDLE="$RUNNER_TEMP/ttyfish-deploy.tar.gz"
+          BUNDLE_SHA256="$(sha256sum "$BUNDLE" | cut -d' ' -f1)"
 
-          echo "--- 执行部署 ---"
-          $S "/opt/ttyfish/deploy.sh $TAG"
+          "${SSH[@]}" 'cat > /opt/ttyfish/deploy.sh && chmod 755 /opt/ttyfish/deploy.sh' < deploy/deploy.sh
+          aws s3 cp "$BUNDLE" "s3://${R2_BUCKET}/${OBJECT_KEY}" \
+            --endpoint-url "$ENDPOINT" --region auto --only-show-errors
+          PRESIGNED_URL="$(aws s3 presign "s3://${R2_BUCKET}/${OBJECT_KEY}" \
+            --endpoint-url "$ENDPOINT" --region auto --expires-in 900)"
+          echo "::add-mask::$PRESIGNED_URL"
+          printf '%s\n' "$PRESIGNED_URL" |
+            "${SSH[@]}" "/opt/ttyfish/deploy.sh $TAG $BUNDLE_SHA256 $R2_ACCOUNT_ID $R2_BUCKET -"
 
       - name: 部署后确认
-        if: github.event_name != 'release'
-        env:
-          SSH_KEY: ${{ secrets.TTYFISH_DEPLOY }}
         run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s' "$SSH_KEY" | tr -d '\r' > ~/.ssh/k
-          printf '\n' >> ~/.ssh/k
-          chmod 600 ~/.ssh/k
-          ssh-keyscan -H 159.75.78.7 >> ~/.ssh/known_hosts 2>/dev/null || true
           ssh -i "$HOME/.ssh/k" -o IdentitiesOnly=yes -o BatchMode=yes deploy@159.75.78.7 \
             'systemctl is-active ttyfish; cat /opt/ttyfish/.version 2>/dev/null; curl -s --max-time 3 http://127.0.0.1:12332/healthz; echo'

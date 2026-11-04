@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 服务器侧的部署脚本：把指定 tag 的 Release 资产换上来。
+# 服务器侧的部署脚本：安装 GitHub Actions CI 已构建并传来的产物。
 #
-#   /opt/ttyfish/deploy.sh v0.1.6
+#   /opt/ttyfish/deploy.sh deploy-<commit> <sha256> <r2-account-id> <bucket> -
 #
 # 由 CI 通过 SSH 调用（也方便手动执行）。三样东西：
 #   1. backend  账号 + 房间 + 规则
@@ -11,53 +11,29 @@
 # 顺序是"后端 → 前端 → 网关"：前端要用后端的新接口，所以排在后端之后；
 # 网关重启会踢掉正在玩的人，所以压在最后。
 #
-# 不在生产机上编译，也不从 CI 传几十 MB 的二进制过来——这个方向跨境只有几十 KB/s，
-# 让服务器经本机 mihomo 从 GitHub Release 拉才是秒级。
+# 不在生产机上编译或下载 Release；部署只安装同一 CI run 生成并校验的产物。
 set -uo pipefail
 
 TAG=${1:-}
-if [ -z "$TAG" ]; then
-	echo "用法: $0 <tag>（例如 v0.1.6）" >&2
+EXPECTED_SHA256=${2:-}
+R2_ACCOUNT_ID=${3:-}
+R2_BUCKET=${4:-}
+PACKAGE_SOURCE=${5:-}
+if [ -z "$TAG" ] || [[ ! "$EXPECTED_SHA256" =~ ^[a-f0-9]{64}$ ]] ||
+	[[ ! "$R2_ACCOUNT_ID" =~ ^[a-f0-9]{32}$ ]] || [ -z "$R2_BUCKET" ] ||
+	[ "$PACKAGE_SOURCE" != "-" ]; then
+	echo "用法: $0 <version> <sha256> <r2-account-id> <bucket> -" >&2
 	exit 2
 fi
 
-REPO="xingzitian/TTYFish"
 BIN_DIR="/opt/ttyfish"
 # 前端正本放在 1Panel 的站点目录里：openresty 跑在容器里，只挂载了 /opt/1panel/www
 WEB_DIR="/opt/1panel/www/sites/TTYFish/index"
 SSH_PORT=12331
 WEB_PORT=12332
 BACKEND_HEALTH="http://127.0.0.1:8082/healthz"
-PROXY="http://127.0.0.1:7890"
 
 log() { echo "[$(date '+%F %T')] $*"; }
-
-# 下载一个资产。
-#
-# 顺序是有讲究的：**先多试几轮代理**，直连只当最后手段。
-#
-# 实测：走本机 mihomo 是 1.9MB/s（11MB 的包 6 秒），直连只有 5KB/s（要 40 分钟）。
-# 2026-11-02 两次发布都栽在这——代理抖一下（SSL_ERROR_SYSCALL），脚本立刻退到直连，
-# 然后在那里干等 5 分钟，整次发布失败。代理本身几秒就恢复了，多试几次就过去了。
-fetch() {
-	local url=$1
-	local out=$2
-	local attempt
-
-	for attempt in 1 2 3 4 5; do
-		# --retry-all-errors 把 TLS 握手被掐、连接重置也算作可重试
-		if curl -fsSL --retry 2 --retry-delay 2 --retry-all-errors --max-time 120 -o "$out" "$url"; then
-			return 0
-		fi
-		log "第 $attempt 轮经代理失败，2 秒后重试"
-		sleep 2
-	done
-
-	# 直连只在代理彻底不可用时试一次，而且只等 60 秒——
-	# 这个速度根本下不完大文件，等下去只是白白拖长失败时间。
-	log "代理 5 轮都失败，试直连（很慢，最多等 60 秒）"
-	curl -fsSL --http1.1 --max-time 60 --noproxy '*' -o "$out" "$url"
-}
 
 # 发版是自己挑的时间窗口，有人在玩也照推——只留一行日志方便事后对账
 ACTIVE=$(ss -Htn state established "( sport = :$SSH_PORT )" 2>/dev/null | wc -l)
@@ -67,42 +43,63 @@ fi
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
+PACKAGE="$TMP/ci-artifact.tar.gz"
+R2_URL_PREFIX="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/"
+R2_VIRTUAL_HOST_PREFIX="https://${R2_BUCKET}.${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/"
 
-BASE="https://github.com/$REPO/releases/download/$TAG"
-export https_proxy="$PROXY" http_proxy="$PROXY"
-# 下载走代理，但本地健康检查绝对不能走——否则 curl 会把 127.0.0.1 也塞给 mihomo
-export no_proxy="127.0.0.1,localhost" NO_PROXY="127.0.0.1,localhost"
-
-log "下载 $TAG"
-for name in backend hub; do
-	if ! fetch "$BASE/$name-linux-amd64" "$TMP/$name"; then
-		log "下载 $name 失败（Release 还没建好？）"
-		exit 1
-	fi
-	if ! fetch "$BASE/$name-linux-amd64.sha256" "$TMP/$name.sum"; then
-		log "下载 $name 的校验文件失败"
-		exit 1
-	fi
-	expect=$(cut -d' ' -f1 "$TMP/$name.sum")
-	actual=$(sha256sum "$TMP/$name" | cut -d' ' -f1)
-	if [ "$expect" != "$actual" ]; then
-		log "$name sha256 不匹配：期望 $expect，实际 $actual"
-		exit 1
-	fi
-	chmod +x "$TMP/$name"
-done
-
-# 前端单独下：没有这个资产就只更新二进制（老版本 Release 没有 web.tar.gz）
-HAS_WEB=0
-if fetch "$BASE/web.tar.gz" "$TMP/web.tar.gz"; then
-	if tar -tzf "$TMP/web.tar.gz" >/dev/null 2>&1; then
-		HAS_WEB=1
-	else
-		log "web.tar.gz 下载下来不是有效压缩包，跳过前端"
-	fi
-else
-	log "这个 Release 没有 web.tar.gz，跳过前端"
+if ! IFS= read -r PACKAGE_URL; then
+	log "没有收到 R2 下载链接"
+	exit 1
 fi
+case "$PACKAGE_URL" in
+	"$R2_URL_PREFIX"*|"$R2_VIRTUAL_HOST_PREFIX"*) ;;
+	*)
+		log "R2 下载链接的主机与配置不符"
+		exit 1
+		;;
+esac
+log "从 Cloudflare R2 下载 CI 产物 $TAG"
+if ! printf 'url = "%s"\n' "$PACKAGE_URL" |
+	curl --config - --fail --silent --show-error --retry 2 --retry-delay 2 \
+		--max-time 300 --proto '=https' --output "$PACKAGE"; then
+	log "CI 产物下载失败"
+	exit 1
+fi
+unset PACKAGE_URL
+
+log "校验并解包 CI 产物 $TAG"
+if ! printf '%s  %s\n' "$EXPECTED_SHA256" "$PACKAGE" | sha256sum --check --status; then
+	log "CI 产物 SHA256 校验失败"
+	exit 1
+fi
+if tar -tzf "$PACKAGE" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+	log "CI 产物包含非法路径"
+	exit 1
+fi
+if ! tar -xzf "$PACKAGE" -C "$TMP"; then
+	log "CI 产物解包失败"
+	exit 1
+fi
+for name in hub backend; do
+	if [ ! -f "$TMP/$name-linux-amd64" ] || [ ! -f "$TMP/$name-linux-amd64.sha256" ]; then
+		log "CI 产物缺少 $name 或其校验文件"
+		exit 1
+	fi
+done
+if [ ! -f "$TMP/web.tar.gz" ] || [ ! -f "$TMP/web.tar.gz.sha256" ] ||
+	! (cd "$TMP" && sha256sum --check web.tar.gz.sha256) ||
+	! tar -tzf "$TMP/web.tar.gz" >/dev/null 2>&1; then
+	log "CI 产物缺少有效的前端包"
+	exit 1
+fi
+if ! (cd "$TMP" && sha256sum --check hub-linux-amd64.sha256 backend-linux-amd64.sha256); then
+	log "CI 二进制校验失败"
+	exit 1
+fi
+mv "$TMP/backend-linux-amd64" "$TMP/backend"
+mv "$TMP/hub-linux-amd64" "$TMP/hub"
+chmod +x "$TMP/backend" "$TMP/hub"
+HAS_WEB=1
 
 # ---- 1. 后端 ----
 log "替换后端"

@@ -4,11 +4,11 @@
 
 ## 日常测试部署
 
-推送到 `main` 后，工作流会自动构建并部署。也可以在 Actions → Release & Deploy → Run workflow
-选择一个分支、tag 或 commit 手动部署。部署使用 `deploy-<commit>` 命名的 GitHub **prerelease**
-暂存构建资产供服务器下载，不会创建正式版本 Release，也不需要手动打 tag。
+推送到 `main` 后，CI 构建并验证后端、网关和前端。CI 成功后，部署工作流从**同一 CI run**
+下载 Actions artifacts，校验后上传到私有 Cloudflare R2 bucket；服务器通过短时效预签名 URL
+拉取产物。整个部署不会重新编译或创建 Release/prerelease，单纯推送 `v*` tag 不会触发部署。
 
-每次构建包含三样东西：
+CI 为同一 commit 上传三样部署产物（保留 7 天）：
 
 | 资产 | 内容 |
 |---|---|
@@ -16,18 +16,35 @@
 | `web.tar.gz` | 前端构建产物（`VITE_SSH_HOST` 在构建时注入） |
 | `hub-linux-amd64` | SSH 网关 |
 
-工作流会：
+部署工作流会：
 
-1. 构建后端、网关和前端，资产存入对应 commit 的 prerelease
-2. SSH 进服务器，把 `deploy/deploy.sh` 推上去
-3. 执行 `deploy.sh <tag>`：下载三个资产 → 逐个校验 → 有人在玩记一行日志 →
+1. 仅接受 `main` 上成功且由 push 触发的 CI run；不处理 PR 或其他事件
+2. 下载该 run 的二进制和前端 artifacts，校验 SHA256，再将它们打包
+3. 把压缩产物上传到私有 R2；生成 15 分钟有效的预签名 URL，经 SSH 传给服务器
+4. 服务器从 R2 下载后再次校验 SHA256 → 有人在玩记一行日志 →
    **按 后端 → 前端 → 网关 的顺序**替换并检查 → 任一步失败自动回滚
+
+### R2 一次性配置
+
+部署工作流使用 Cloudflare Account ID `c7271c3053a80ea7bf1206cbb25cf45e` 和 bucket `ttyfish`。
+bucket 应保持私有，不要启用公开访问。Cloudflare Dashboard → R2 → Manage R2 API Tokens
+创建仅对 `ttyfish` bucket 有 **Object Read & Write** 权限的 token；不需要账户级管理权限。
+
+在 GitHub 仓库 `Settings → Secrets and variables → Actions → New repository secret` 中添加：
+
+| Secret 名称 | 值 |
+|---|---|
+| `R2_ACCESS_KEY_ID` | R2 S3 API token 的 Access Key ID |
+| `R2_SECRET_ACCESS_KEY` | 对应的 Secret Access Key |
+
+Secret Access Key 只在创建时显示；直接粘贴到 GitHub Secret，不要提交到仓库或放在服务器上。
+部署 SSH key 仍使用现有 `TTYFISH_DEPLOY` secret。建议在 R2 bucket 配置对象生命周期规则，
+删除 `deploy/` 前缀下超过 7 天的对象，避免积累过期部署包。
 
 ## 正式版本发布
 
-只有在 GitHub 上手动创建并 **Publish release** 后，工作流才会为该正式版本构建并上传资产；
-此流程不会部署到机器。单纯推送 `v*` tag 不会创建 Release 或触发部署。正式 Release 的发布
-动作由操作者显式执行，测试部署不会将其误标为正式版本。
+正式 Release 由操作者显式发布；`.github/workflows/release.yml` 会为已发布 tag 构建并上传资产，
+但不会部署到服务器。测试部署工作流不会创建或发布 GitHub Release。
 
 **为什么是这个顺序**：前端要用后端的新接口，所以排后端之后；网关重启会踢掉正在
 玩的人，所以压最后。前端的健康检查是 `curl 127.0.0.1:12332/` 和 `/account` 都要 200
@@ -48,21 +65,12 @@ journalctl -u ttyfish -n 50 --no-pager
 
 | 方案 | 问题 |
 |---|---|
-| CI 直接 `scp` 15MB 二进制 | 跨境只有几十 KB/s，传一次十几分钟 |
-| 服务器定时轮询 Release | CI 本来就能连上机器，多一条链路没有收益 |
-| 在服务器上编译 | 能跑，但占生产机 CPU，而且产物不是 CI 验过的那份 |
-| 直连 GitHub 下载 | 实测只有 **5 KB/s**，15MB 传不完 |
-| Actions artifact | 下载需要鉴权，90 天过期 |
+| 服务器直接下载 Actions artifact | 需要给服务器提供 GitHub API 凭证，因此不采用 |
+| 在服务器上编译 | 占用生产机 CPU，而且部署的不是 CI 验过的那份 |
+| 从 Release 下载 | 与构建及 CI run 脱节，且测试部署不应创建 Release |
 
-## 下载速度实测（2026-10-30，159.75.78.7）
-
-| 路径 | 速度 | 说明 |
-|---|---|---|
-| 直连 GitHub | 5 KB/s | 2.4MB 的包 55 秒没下完 |
-| 走本机 mihomo（127.0.0.1:7890） | 3 MB/s | 13MB 的包 4.3 秒 |
-
-所以 `deploy.sh` 里**必须走代理**：先试 `127.0.0.1:7890`，失败才直连。
-15MB 的二进制走代理约 5 秒；直连那一档实际上等于不可用。
+产物内容由服务器从 R2 下载，避免将大型文件跨境 SCP。Actions 只通过 SSH 发送短时效签名 URL；
+服务器不持有 R2 长期凭证。R2 对象按 commit/run 唯一命名，建议配合上述生命周期规则自动清理。
 
 ## 服务器上的一次性设置
 

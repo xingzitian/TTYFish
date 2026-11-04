@@ -87,7 +87,28 @@ jobs:
       # 这一步同时跑 vue-tsc 类型检查，类型不对会直接失败
       - name: 构建
         working-directory: web
+        env:
+          VITE_SSH_HOST: ${{ vars.TTYFISH_SSH_HOST || '159.75.78.7' }}
+          VITE_SSH_PORT: ${{ vars.TTYFISH_SSH_PORT || '12331' }}
         run: npm run build
+
+      - name: 打包前端部署产物
+        if: github.event_name == 'push'
+        working-directory: web
+        run: |
+          tar -czf "$RUNNER_TEMP/web.tar.gz" -C dist .
+          cd "$RUNNER_TEMP"
+          sha256sum web.tar.gz > web.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push'
+        with:
+          name: ttyfish-web
+          path: |
+            ${{ runner.temp }}/web.tar.gz
+            ${{ runner.temp }}/web.tar.gz.sha256
+          retention-days: 7
+          if-no-files-found: error
 
   smoke:
     name: smoke (登录链路)
@@ -125,8 +146,10 @@ jobs:
           GOOS: linux
           GOARCH: amd64
         run: |
-          go build -trimpath -ldflags "-s -w" -o ../dist/hub-linux-amd64 ./cmd/hub
-          go build -trimpath -ldflags "-s -w" -o ../dist/backend-linux-amd64 ./cmd/backend
+          TAG="deploy-${GITHUB_SHA:0:12}"
+          mkdir -p ../dist
+          go build -trimpath -ldflags "-s -w -X main.version=$TAG" -o ../dist/hub-linux-amd64 ./cmd/hub
+          go build -trimpath -ldflags "-s -w -X github.com/xingzitian/TTYFish/hub/internal/api.serverVersion=$TAG" -o ../dist/backend-linux-amd64 ./cmd/backend
 
       - name: 校验产物
         run: |
@@ -134,11 +157,17 @@ jobs:
           test -x dist/hub-linux-amd64
           file dist/backend-linux-amd64
           test -x dist/backend-linux-amd64
+          cd dist
+          sha256sum hub-linux-amd64 > hub-linux-amd64.sha256
+          sha256sum backend-linux-amd64 > backend-linux-amd64.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hub-linux-amd64
+          name: ttyfish-binaries
           path: |
             dist/hub-linux-amd64
+            dist/hub-linux-amd64.sha256
             dist/backend-linux-amd64
+            dist/backend-linux-amd64.sha256
+          retention-days: 7
           if-no-files-found: error

@@ -39,7 +39,7 @@
 | PT 积分 | 后端持久化余额与本人查询 API；UNO 最终赢家按游戏分数 10:1 获得 PT，68 分 = 6.8 PT，重复结算不重复入账；暂无积分 UI |
 | 实时状态与重连 | 网关通过 SSE 接收玩家快照，支持断线托管、恢复座位与新连接接管 |
 | 动作与信息校验 | 后端确定座位，按房间版本校验动作，仅返回该玩家允许看到的游戏信息 |
-| CI 与发布 | Go 测试、前端构建、账号 API 冒烟测试，以及 Release 部署工作流 |
+| CI 与部署 | Go 测试、前端构建、账号 API 冒烟测试；部署使用同一 CI run 的 artifacts |
 
 接下来主要补齐：
 
@@ -174,7 +174,7 @@ bash hub/scripts/login-smoke.sh
 
 ## 发布与生产配置
 
-`.github/workflows/deploy.yml` 在推送 `main` 后自动部署测试版；测试构建以 prerelease 资产供服务器下载，不创建正式版本。正式版只在 GitHub 上手动发布 Release 后构建资产，不自动部署。也可在 Actions 手动选分支、tag 或 commit 部署。详见[部署说明](docs/DEPLOY.md)。
+推送 `main` 后，`.github/workflows/ci.yml` 构建并验证可部署 artifacts；CI 全部成功后，`.github/workflows/deploy.yml` 将产物存入私有 Cloudflare R2，由服务器通过短时效链接下载并部署。正式 Release 显式发布后，由 `release.yml` 构建发布资产但不部署。详见[部署说明](docs/DEPLOY.md)。
 
 仓库记录的生产服务配置如下。systemd unit 由服务器维护，不在仓库中；调整部署时应核对服务器上的实际文件。
 
@@ -211,7 +211,7 @@ ExecStart=/opt/ttyfish/hub -addr :12331 -host-key /var/lib/ttyfish/host_ed25519 
 | [房间与游戏协议](docs/ROOM_API.md) | 房间接口、UNO 动作、版本校验与 SSE |
 | [前端说明](docs/FRONTEND.md) | Vue 页面和构建方式 |
 | [游戏开发指南](docs/GAME_SDK.md) | 游戏接口与终端界面契约 |
-| [部署说明](docs/DEPLOY.md) | Release 资产、服务器更新与回滚 |
+| [部署说明](docs/DEPLOY.md) | CI artifacts、服务器更新与回滚 |
 | [分工与进度记录](docs/PROGRESS.md) | Web、SSH 与后端分工 |
 
 `REQUIREMENTS.md`、`ARCHITECTURE.md`、`DEVELOPMENT.md`、`GATEWAY.md` 等保留了早期设计或改造过程，部分描述尚未同步。本 README 提供当前概览；具体接口以代码和 OpenAPI 为准，避免继续按“自动建号、无密码、网关本地运行规则”的旧方案开发。

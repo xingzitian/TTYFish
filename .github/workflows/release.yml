@@ -1,0 +1,62 @@
+name: Release assets
+
+# 正式 Release 由操作者显式发布；此工作流只补齐其资产，不部署到服务器。
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并上传正式版资产
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: hub/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 编译 linux/amd64
+        working-directory: hub
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          mkdir -p ../dist
+          go build -trimpath -ldflags "-s -w -X main.version=$TAG" -o ../dist/hub-linux-amd64 ./cmd/hub
+          go build -trimpath -ldflags "-s -w -X github.com/xingzitian/TTYFish/hub/internal/api.serverVersion=$TAG" -o ../dist/backend-linux-amd64 ./cmd/backend
+          cd ../dist
+          sha256sum hub-linux-amd64 > hub-linux-amd64.sha256
+          sha256sum backend-linux-amd64 > backend-linux-amd64.sha256
+
+      - name: 构建前端
+        working-directory: web
+        env:
+          VITE_SSH_HOST: ${{ vars.TTYFISH_SSH_HOST || '159.75.78.7' }}
+          VITE_SSH_PORT: ${{ vars.TTYFISH_SSH_PORT || '12331' }}
+        run: |
+          npm ci
+          npm run build
+          tar -czf ../dist/web.tar.gz -C dist .
+          cd ../dist
+          sha256sum web.tar.gz > web.tar.gz.sha256
+
+      - name: 上传正式版资产
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/hub-linux-amd64 dist/hub-linux-amd64.sha256 dist/backend-linux-amd64 dist/backend-linux-amd64.sha256 dist/web.tar.gz dist/web.tar.gz.sha256 --clobber
