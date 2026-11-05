@@ -35,6 +35,12 @@ BACKEND_HEALTH="http://127.0.0.1:8082/healthz"
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
+# web_code 请求站点并返回**跟随跳转之后**的状态码。
+# 配置了 HTTPS 之后，http:// 会先给 301/302，直接看首个状态码会误判成"前端没起来"。
+web_code() {
+	curl -skL -o /dev/null -w '%{http_code}' --max-time 5 --noproxy '*' "$1" 2>/dev/null
+}
+
 # 发版是自己挑的时间窗口，有人在玩也照推——只留一行日志方便事后对账
 ACTIVE=$(ss -Htn state established "( sport = :$SSH_PORT )" 2>/dev/null | wc -l)
 if [ "$ACTIVE" -gt 0 ]; then
@@ -140,10 +146,13 @@ if [ "$HAS_WEB" -eq 1 ]; then
 	mv "$WEB_DIR.new" "$WEB_DIR"
 	chmod -R a+rX "$WEB_DIR"
 
+	# 站点可能配了"HTTP 强制跳 HTTPS"，所以这里必须跟随跳转：
+	#   -L 跟随 3xx，-k 接受指向本机 IP 的自签/域名证书。
+	# 只看最终是不是 200——跳转本身说明 nginx 是活的，不该判失败。
 	ok=0
 	for _ in $(seq 1 5); do
-		code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 --noproxy '*' "http://127.0.0.1:$WEB_PORT/")
-		deep=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 --noproxy '*' "http://127.0.0.1:$WEB_PORT/account")
+		code=$(web_code "http://127.0.0.1:$WEB_PORT/")
+		deep=$(web_code "http://127.0.0.1:$WEB_PORT/account")
 		if [ "$code" = "200" ] && [ "$deep" = "200" ]; then
 			ok=1
 			break

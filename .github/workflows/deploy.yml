@@ -89,4 +89,4 @@ jobs:
       - name: 部署后确认
         run: |
           ssh -i "$HOME/.ssh/k" -o IdentitiesOnly=yes -o BatchMode=yes deploy@159.75.78.7 \
-            'systemctl is-active ttyfish; cat /opt/ttyfish/.version 2>/dev/null; curl -s --max-time 3 http://127.0.0.1:12332/healthz; echo'
+            'systemctl is-active ttyfish; cat /opt/ttyfish/.version 2>/dev/null; curl -skL --max-time 5 -o /dev/null -w "web=%{http_code}\n" http://127.0.0.1:12332/'
