@@ -1,14 +1,16 @@
 // Package tui renders Exploding Kittens using only the player's filtered snapshot.
+//
+// 交互原则和 UNO 保持一致：**一个动作一次按键**。没有输入框、没有命令语法，
+// 所有选择都靠数字键推进，界面上始终写着"现在能按什么"。
 package tui
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
+	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
 	"github.com/xingzitian/TTYFish/games/explodingkittens/engine"
 	"github.com/xingzitian/TTYFish/sdk/client"
 	"github.com/xingzitian/TTYFish/sdk/ui"
@@ -24,23 +26,52 @@ type Options struct {
 	SetMode   func(string, ui.ColorMode)
 }
 
+// step 是"玩家正在选什么"。牌局阶段由快照决定，step 只描述进行中的选择，
+// 这样一个动作不会同时有两种解释。
+type step int
+
+const (
+	stepIdle       step = iota
+	stepCombo           // 已选一张猫牌，等第二/第三张同色
+	stepTarget          // 等选目标玩家
+	stepRequest         // 三张组合：等选要哪种牌
+	stepDefusePick      // 拆弹第一步：选哪张拆弹牌
+	stepDefusePos       // 拆弹第二步：选放回第几张
+)
+
+const (
+	handPageSize   = 5
+	tickInterval   = 200 * time.Millisecond
+	errTTL         = 2 * time.Second
+	playerPanelTTL = 5 * time.Second
+)
+
 type Model struct {
 	c        client.Client
 	snap     client.Snapshot
 	sub      <-chan client.Snapshot
-	input    textinput.Model
 	renderer *lipgloss.Renderer
 	opts     Options
 	width    int
 	height   int
-	err      string
-	closed   bool
-	boss     bool
-	help     bool
-	handPage int
+
+	errMsg string
+	errAt  time.Time
+	closed bool
+	boss   bool
+	help   bool
+
+	page      int
+	step      step
+	picked    []engine.Card
+	target    int
+	pos       int
+	deadline  time.Time
+	playersAt time.Time
 }
 
 type closedMsg struct{}
+type tickMsg struct{}
 
 func NewModel(c client.Client, opts Options, r *lipgloss.Renderer) *Model {
 	if r == nil {
@@ -56,14 +87,10 @@ func NewModel(c client.Client, opts Options, r *lipgloss.Renderer) *Model {
 			opts.Mode = mode
 		}
 	}
-	input := textinput.New()
-	input.Prompt = "> "
-	input.CharLimit = 100
-	input.Width = 70
-	input.Focus()
-	m := &Model{c: c, opts: opts, renderer: r, input: input, width: 80, height: 24}
+	m := &Model{c: c, opts: opts, renderer: r, width: 80, height: 24, target: -1}
 	if c != nil {
 		m.snap, m.sub = c.Snapshot(), c.Updates()
+		m.anchorDeadline()
 	}
 	return m
 }
@@ -81,332 +108,618 @@ func wait(ch <-chan client.Snapshot) tea.Cmd {
 	}
 }
 
-func (m *Model) Init() tea.Cmd { return tea.Batch(wait(m.sub), textinput.Blink) }
+func (m *Model) Init() tea.Cmd {
+	return tea.Batch(wait(m.sub), m.tick())
+}
 
-// The gateway owns room membership and closes its stream on disconnect.
+// tick 只在有倒计时的时候继续排下一帧，避免空闲时也每 200ms 重绘。
+func (m *Model) tick() tea.Cmd {
+	if m.deadline.IsZero() {
+		return nil
+	}
+	return tea.Tick(tickInterval, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
 func (m *Model) Close() {}
 
-func (m *Model) HasModal() bool { return m.boss || m.input.Value() != "" }
+// HasModal 告诉网关：现在有弹窗/选择占着键盘，Esc 先归游戏处理。
+func (m *Model) HasModal() bool {
+	return m.boss || m.help || m.step != stepIdle
+}
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case client.SnapshotMsg:
-		m.snap = client.Snapshot(v)
-		return m, wait(m.sub)
+		m.applySnapshot(client.Snapshot(v))
+		return m, tea.Batch(wait(m.sub), m.tick())
 	case closedMsg:
 		m.closed = true
 		return m, nil
+	case tickMsg:
+		return m, m.tick()
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, v.Width), max(1, v.Height)
-		m.input.Width = max(1, m.width-4)
 		return m, nil
 	case tea.KeyMsg:
-		switch v.String() {
-		case "pgdown":
-			m.handPage++
-			return m, nil
-		case "pgup":
-			m.handPage = max(0, m.handPage-1)
-			return m, nil
-		case "ctrl+b":
-			m.boss = !m.boss
-			return m, nil
-		case "ctrl+c":
-			return m, tea.Quit
-		case "esc":
-			m.boss = false
-			m.input.SetValue("")
-			return m, nil
-		case "enter":
-			if m.boss {
-				m.boss = false
-			} else {
-				m.err = ""
-				if err := m.command(m.input.Value()); err != nil {
-					m.err = err.Error()
-				}
-				m.input.SetValue("")
-			}
-			return m, nil
-		}
+		return m, m.handleKey(v)
 	}
-	if m.boss {
-		return m, nil
-	}
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
-func (m *Model) command(text string) error {
-	fields := strings.Fields(text)
-	if len(fields) == 0 {
+// applySnapshot 在快照变化时收敛界面状态：阶段变了就丢掉未完成的选择，
+// 倒计时按服务端给的剩余毫秒重新锚定。
+func (m *Model) applySnapshot(next client.Snapshot) {
+	prevPhase := m.obs().Phase
+	m.snap = next
+	o := m.obs()
+	if o.Phase != prevPhase || next.Phase != client.Playing {
+		m.reset()
+	}
+	m.anchorDeadline()
+}
+
+// anchorDeadline 把"服务端剩余毫秒"换成截止时刻；本地每 200ms 只是重算差值，
+// 不依赖服务端继续推快照。
+func (m *Model) anchorDeadline() {
+	if m.snap.PendingLeftMS > 0 {
+		m.deadline = time.Now().Add(time.Duration(m.snap.PendingLeftMS) * time.Millisecond)
+		return
+	}
+	m.deadline = time.Time{}
+}
+
+func (m *Model) reset() {
+	m.step = stepIdle
+	m.picked = nil
+	m.target = -1
+	m.pos = 0
+}
+
+func (m *Model) obs() engine.Observation {
+	o, _ := m.snap.View.(engine.Observation)
+	return o
+}
+
+func (m *Model) inGame() bool { return m.snap.Phase == client.Playing }
+
+func (m *Model) myTurn() bool {
+	o := m.obs()
+	return m.inGame() && o.Turn == m.snap.MySeat && o.Phase == engine.Playing
+}
+
+func (m *Model) alive() bool {
+	o := m.obs()
+	return m.snap.MySeat >= 0 && m.snap.MySeat < len(o.Alive) && o.Alive[m.snap.MySeat]
+}
+
+func (m *Model) showPlayers() bool { return time.Now().Before(m.playersAt) }
+
+func (m *Model) fail(msg string) {
+	m.errMsg = msg
+	m.errAt = time.Now()
+}
+
+func (m *Model) errVisible() bool {
+	return m.errMsg != "" && time.Since(m.errAt) < errTTL
+}
+
+// say 成功时清掉旧错误，避免提示一直挂在那里。
+func (m *Model) say() { m.errMsg = "" }
+
+func (m *Model) act(a engine.Action) {
+	if m.c == nil || m.closed || m.snap.Kicked {
+		m.fail("连接不可用")
+		return
+	}
+	if err := m.c.Act(a); err != nil {
+		m.fail(err.Error())
+		return
+	}
+	m.say()
+}
+
+// pageCards 返回当前页的手牌（已排序）和总页数。
+func (m *Model) pageCards() ([]engine.Card, int) {
+	hand := sortHand(m.obs().Hand)
+	pages := (len(hand) + handPageSize - 1) / handPageSize
+	if pages < 1 {
+		pages = 1
+	}
+	if m.page >= pages {
+		m.page = pages - 1
+	}
+	if m.page < 0 {
+		m.page = 0
+	}
+	start := m.page * handPageSize
+	end := start + handPageSize
+	if start > len(hand) {
+		start = len(hand)
+	}
+	if end > len(hand) {
+		end = len(hand)
+	}
+	return hand[start:end], pages
+}
+
+func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
+	key := k.String()
+
+	if key == "ctrl+b" {
+		m.boss = !m.boss
 		return nil
 	}
-	if m.c == nil || m.closed || m.snap.Kicked {
-		return fmt.Errorf("房间连接不可用")
-	}
-	if len(fields) == 1 {
-		switch fields[0] {
-		case "start":
-			return m.c.Start()
-		case "bot":
-			return m.c.AddBot()
-		case "vote":
-			return m.c.VoteRestart(true)
-		case "help":
-			m.help = !m.help
-			return nil
-		case "m":
-			m.opts.Mode = m.opts.Mode.Next()
-			if m.opts.SetMode != nil {
-				m.opts.SetMode(m.opts.Key, m.opts.Mode)
-			}
-			return nil
-		case "i":
-			if m.opts.Layout == ui.LayoutCompact {
-				m.opts.Layout = ui.LayoutRich
-			} else {
-				m.opts.Layout = ui.LayoutCompact
-			}
-			if m.opts.SetLayout != nil {
-				m.opts.SetLayout(m.opts.Key, m.opts.Layout)
-			}
-			return nil
-		}
-	}
-	o, ok := m.snap.View.(engine.Observation)
-	if !ok || m.snap.Phase != client.Playing {
-		return fmt.Errorf("输入 start 开局，bot 加电脑，vote 重开，i 切换显示")
-	}
-	a, err := parseCommand(fields, o)
-	if err != nil {
-		return err
-	}
-	return m.c.Act(a)
-}
-
-func parseCommand(fields []string, o engine.Observation) (engine.Action, error) {
-	a := engine.Action{Seat: o.Seat, Target: -1}
-	usage := fmt.Errorf("命令或参数错误，请按屏幕提示输入")
-	if len(fields) == 0 {
-		return a, usage
-	}
-	card := func(value string) (int, error) {
-		i, err := strconv.Atoi(value)
-		if err != nil || i < 1 || i > len(o.Hand) {
-			return 0, fmt.Errorf("手牌序号无效")
-		}
-		return o.Hand[i-1].ID, nil
-	}
-	target := func(value string) (int, error) {
-		seat, err := strconv.Atoi(value)
-		if err != nil || seat < 1 || seat > len(o.Alive) {
-			return -1, fmt.Errorf("玩家座位号无效")
-		}
-		return seat - 1, nil
-	}
-	var err error
-	switch fields[0] {
-	case "draw", "pass":
-		if len(fields) != 1 {
-			return a, usage
-		}
-		a.Type = engine.Draw
-		if fields[0] == "pass" {
-			a.Type = engine.Pass
-		}
-	case "play", "nope", "give", "defuse", "pair", "triple":
-		cardCount := 1
-		a.Type = engine.Play
-		switch fields[0] {
-		case "nope":
-			a.Type = engine.PlayNope
-		case "give":
-			a.Type = engine.Give
-		case "defuse":
-			a.Type = engine.UseDefuse
-		case "pair":
-			cardCount = 2
-		case "triple":
-			cardCount = 3
-		}
-		expected := 1 + cardCount
-		switch fields[0] {
-		case "defuse", "pair":
-			expected++
-		case "triple":
-			expected += 2
-		case "play":
-			// Only Favor needs an additional target for a single card.
-			if len(fields) == 3 {
-				expected++
-			}
-		}
-		if len(fields) != expected {
-			return a, usage
-		}
-		for _, value := range fields[1 : 1+cardCount] {
-			id, e := card(value)
-			if e != nil {
-				return a, e
-			}
-			a.CardIDs = append(a.CardIDs, id)
-		}
-		switch fields[0] {
-		case "play":
-			if len(fields) == 3 {
-				a.Target, err = target(fields[2])
-			}
-		case "pair", "triple":
-			a.Target, err = target(fields[1+cardCount])
-			if fields[0] == "triple" {
-				var ok bool
-				a.Requested, ok = engine.ParseKind(fields[len(fields)-1])
-				if !ok {
-					return a, fmt.Errorf("未知牌名，可输入中文牌名或原英文标识")
-				}
-			}
-		case "defuse":
-			a.Position, err = strconv.Atoi(fields[2])
-			if err == nil && (a.Position < 0 || a.Position > o.DeckCount) {
-				err = fmt.Errorf("放回位置应为 0 到 %d", o.DeckCount)
-			}
-		}
-	default:
-		return a, usage
-	}
-	return a, err
-}
-
-func (m *Model) View() string {
 	if m.boss {
-		return ui.ClampFrame("$ go test ./...\nok   workspace (cached)", m.width, m.height)
-	}
-	if m.snap.Kicked {
-		return "连接已被另一登录接管。"
-	}
-	if m.closed {
-		return "房间连接已断开。"
-	}
-	title := m.renderer.NewStyle().Bold(true)
-	if m.opts.Mode != ui.ColorNone {
-		title = title.Foreground(lipgloss.Color("220"))
-		if m.opts.Mode == ui.ColorBlock {
-			title = title.Background(lipgloss.Color("235"))
+		if key == "esc" {
+			m.boss = false
 		}
+		return nil
 	}
-	lines := []string{title.Render(fmt.Sprintf("爆炸猫  房间 %s", m.snap.Code))}
-	o, playing := m.snap.View.(engine.Observation)
-	var players []string
-	for seat, p := range m.snap.Players {
-		name := ui.CutWidth(p.Name, 12)
-		status := ""
-		if playing && seat < len(o.Alive) {
-			if !o.Alive[seat] {
-				status = " 淘汰"
-			} else {
-				status = fmt.Sprintf("(%d)", o.HandCounts[seat])
+	if m.help {
+		// 帮助里只认关闭键，q 依然断开
+		switch key {
+		case "?", "/", "esc":
+			m.help = false
+		case "q":
+			return tea.Quit
+		}
+		return nil
+	}
+
+	switch key {
+	case "?", "/":
+		m.help = true
+		return nil
+	case "i":
+		m.toggleLayout()
+		return nil
+	case "m":
+		m.opts.Mode = m.opts.Mode.Next()
+		if m.opts.SetMode != nil {
+			m.opts.SetMode(m.opts.Key, m.opts.Mode)
+		}
+		return nil
+	case "tab":
+		m.playersAt = time.Now().Add(playerPanelTTL)
+		return nil
+	case "pagedown", "=":
+		// 拆弹选位置时，-= 是"调整位置"而不是翻页
+		if m.step == stepDefusePos {
+			m.handleDefusePos("=")
+			return nil
+		}
+		if m.step == stepRequest {
+			if _, pages := m.requestPage(); m.page < pages-1 {
+				m.page++
 			}
+			return nil
 		}
-		if seat == m.snap.MySeat {
-			name += "(你)"
+		if _, pages := m.pageCards(); m.page < pages-1 {
+			m.page++
 		}
-		players = append(players, fmt.Sprintf("%d:%s%s", seat+1, name, status))
-	}
-	lines = append(lines, ui.JoinWrapped(players, m.width))
-	if playing && m.snap.Phase == client.Playing {
-		lines = append(lines, fmt.Sprintf("回合 P%d · 剩余 %d 回合 · 牌堆 %d · %s",
-			o.Turn+1, o.TurnsRemaining, o.DeckCount, phaseName(o.Phase)))
-		if m.snap.MySeat >= 0 && m.snap.MySeat < len(o.Alive) && !o.Alive[m.snap.MySeat] {
-			lines = append(lines, "你已淘汰，可观战或 Esc 离开。")
-		} else {
-			var hand []string
-			for i, card := range o.Hand {
-				hand = append(hand, fmt.Sprintf("%d.%s", i+1, card.Kind.Name()))
+		return nil
+	case "pageup", "-":
+		if m.step == stepDefusePos {
+			m.handleDefusePos("-")
+			return nil
+		}
+		if m.step == stepRequest {
+			if m.page > 0 {
+				m.page--
 			}
-			rows := strings.Split(ui.JoinWrapped(hand, m.width), "\n")
-			pageSize := max(1, m.height-16)
-			pages := max(1, (len(rows)+pageSize-1)/pageSize)
-			page := min(m.handPage, pages-1)
-			start := page * pageSize
-			lines = append(lines, rows[start:min(len(rows), start+pageSize)]...)
-			if pages > 1 {
-				lines = append(lines, fmt.Sprintf("手牌 %d/%d 页 · PgUp/PgDn 翻页", page+1, pages))
-			}
+			return nil
 		}
-		if len(o.Future) > 0 {
-			var future []string
-			for _, card := range o.Future {
-				future = append(future, card.Kind.Name())
-			}
-			lines = append(lines, "仅你可见，牌顶起: "+strings.Join(future, " / "))
+		if m.page > 0 {
+			m.page--
 		}
-		switch o.Phase {
-		case engine.Responding:
-			if o.Pending != nil {
-				a := o.Pending.Action
-				desc := fmt.Sprintf("P%d: %s", a.Seat+1, o.Pending.Kind.Name())
-				if len(a.CardIDs) > 1 {
-					desc += fmt.Sprintf(" · %d张组合", len(a.CardIDs))
-				}
-				if len(a.CardIDs) > 1 || o.Pending.Kind == engine.Favor {
-					desc += fmt.Sprintf(" → P%d", a.Target+1)
-				}
-				if a.Requested != "" {
-					desc += " 索要 " + a.Requested.Name()
-				}
-				lines = append(lines, desc, fmt.Sprintf("反制 %d次 · 每次反制后有5秒响应窗口", o.Pending.Nopes))
-			}
-			lines = append(lines, "nope 手牌号  /  pass 放弃反制（回车确认）")
-		case engine.Giving:
-			lines = append(lines, fmt.Sprintf("P%d 选择交牌: give 手牌号", o.Pending.Action.Target+1))
-		case engine.Reinserting:
-			lines = append(lines, fmt.Sprintf("P%d 拆弹: defuse 手牌号 位置(0..%d，0为牌顶)", o.Turn+1, o.DeckCount))
-		default:
-			lines = append(lines, "draw 摸牌结束 / play 手牌号 [目标座位]")
-			if m.opts.Layout != ui.LayoutCompact || m.help {
-				lines = append(lines, "pair 牌号 牌号 目标 / triple 牌号 牌号 牌号 目标 牌名")
-			}
+		return nil
+	case "esc":
+		if m.step != stepIdle {
+			m.reset()
+			m.say()
 		}
-	} else {
-		if playing && o.Winner >= 0 {
-			lines = append(lines, fmt.Sprintf("P%d 获胜！本游戏暂不发放 PT。", o.Winner+1))
-		}
-		lines = append(lines, "start 开始 / bot 加电脑 / vote 投票重开")
+		return nil
+	case "q":
+		// 老板键：不管正在选什么，按下去就是立刻断开。
+		// 以前这里在"选牌中"会变成取消选择，玩家以为断开了其实没有。
+		return tea.Quit
 	}
-	if m.snap.Notice != "" {
-		lines = append(lines, m.snap.Notice)
+
+	// 大厅 / 结算：房主可以开局、加电脑
+	if !m.inGame() {
+		m.lobbyKey(key)
+		return nil
 	}
-	if len(m.snap.Timeline) > 0 && (m.opts.Layout != ui.LayoutCompact || m.help) {
-		for _, event := range m.snap.Timeline[max(0, len(m.snap.Timeline)-3):] {
-			lines = append(lines, fmt.Sprintf("P%d %s", event.Seat+1, event.Text))
-		}
+	if !m.alive() {
+		return nil
 	}
-	if m.err != "" {
-		lines = append(lines, "! "+m.err)
+
+	o := m.obs()
+	switch o.Phase {
+	case engine.Responding:
+		return m.handleResponding(key)
+	case engine.Giving:
+		return m.handleGiving(key)
+	case engine.Reinserting:
+		return m.handleReinserting(key)
 	}
-	lines = append(lines, "help 帮助 · i 显示 · m 颜色 · Ctrl+B 老板键 · Esc 退房")
-	// Keep the command field visible even when the hand occupies many lines.
-	body := ui.ClampFrame(strings.Join(lines, "\n"), m.width, max(1, m.height-1))
-	return ui.ClampFrame(body+"\n"+m.input.View(), m.width, m.height)
+
+	switch m.step {
+	case stepCombo:
+		return m.handleCombo(key)
+	case stepTarget:
+		return m.handleTarget(key)
+	case stepRequest:
+		return m.handleRequest(key)
+	}
+
+	if !m.myTurn() {
+		return nil
+	}
+	if idx, ok := digit(key); ok {
+		m.pickCard(idx)
+		return nil
+	}
+	switch key {
+	case "d":
+		m.act(engine.Action{Type: engine.Draw, Seat: o.Seat, Target: -1})
+	case "enter", " ":
+		m.fail("先按牌前面的数字选牌；想摸牌按 D")
+	}
+	return nil
 }
 
-var _ tea.Model = (*Model)(nil)
-
-func phaseName(phase engine.Phase) string {
-	switch phase {
-	case engine.Playing:
-		return "出牌中"
-	case engine.Responding:
-		return "等待反制"
-	case engine.Giving:
-		return "等待交牌"
-	case engine.Reinserting:
-		return "等待拆弹放回"
-	case engine.Finished:
-		return "已结束"
-	default:
-		return "未知阶段"
+func (m *Model) lobbyKey(key string) {
+	switch key {
+	case "s":
+		if !m.snap.IsHost || m.c == nil {
+			m.fail("只有房主能开局，等房主按 S")
+			return
+		}
+		if err := m.c.Start(); err != nil {
+			m.fail(err.Error())
+		} else {
+			m.say()
+		}
+	case "b":
+		if !m.snap.IsHost || m.c == nil {
+			m.fail("只有房主能加电脑")
+			return
+		}
+		if err := m.c.AddBot(); err != nil {
+			m.fail(err.Error())
+		} else {
+			m.say()
+		}
+	case "v":
+		if m.c == nil {
+			return
+		}
+		if err := m.c.VoteRestart(true); err != nil {
+			m.fail(err.Error())
+		} else {
+			m.say()
+		}
 	}
+}
+
+// pickCard 是"按数字选牌"的统一入口：不同牌进入不同流程。
+func (m *Model) pickCard(idx int) {
+	page, _ := m.pageCards()
+	if idx < 0 || idx >= len(page) {
+		return
+	}
+	c := page[idx]
+	o := m.obs()
+	switch c.Kind {
+	case engine.ExplodingKitten:
+		m.fail("爆炸猫不能主动打出")
+	case engine.Defuse:
+		m.fail("拆弹牌只在摸到爆炸猫时使用")
+	case engine.Nope:
+		m.fail("反制只在有人出牌时使用")
+	case engine.TacoCat, engine.Cattermelon, engine.HairyPotatoCat, engine.BeardCat, engine.RainbowCat:
+		m.step = stepCombo
+		m.picked = []engine.Card{c}
+		m.say()
+	case engine.Favor:
+		// 索要必须选目标
+		m.page = 0
+		m.step = stepTarget
+		m.picked = []engine.Card{c}
+		m.target = -1
+		m.say()
+	default:
+		// 攻击 / 跳过 / 洗牌 / 预知：单张直接出
+		m.act(engine.Action{Type: engine.Play, Seat: o.Seat, CardIDs: []int{c.ID}, Target: -1})
+	}
+}
+
+// handleCombo：再按一张同色的牌就加进来；按错颜色立即取消。
+func (m *Model) handleCombo(key string) tea.Cmd {
+	if idx, ok := digit(key); ok {
+		page, _ := m.pageCards()
+		if idx >= len(page) || len(m.picked) == 0 {
+			return nil
+		}
+		c := page[idx]
+		if c.Kind != m.picked[0].Kind {
+			m.reset()
+			m.fail("颜色不一样，已取消；同色才能凑组合")
+			return nil
+		}
+		m.picked = append(m.picked, c)
+		if len(m.picked) >= 3 {
+			m.page = 0
+			m.step = stepTarget
+			m.target = -1
+		}
+		m.say()
+		return nil
+	}
+	switch key {
+	case "enter", " ":
+		if len(m.picked) < 2 {
+			m.fail("至少要两张同色猫牌")
+			return nil
+		}
+		m.page = 0
+		m.step = stepTarget
+		m.target = -1
+		m.say()
+	}
+	return nil
+}
+
+// handleTarget：数字选座位，回车确认。
+func (m *Model) handleTarget(key string) tea.Cmd {
+	o := m.obs()
+	if idx, ok := digit(key); ok {
+		seat := idx
+		if seat < 0 || seat >= len(o.Alive) || !o.Alive[seat] || seat == o.Seat {
+			m.fail("选一个还活着的对手")
+			return nil
+		}
+		if o.HandCounts[seat] == 0 {
+			m.fail("这个玩家没手牌")
+			return nil
+		}
+		m.target = seat
+		m.say()
+		return nil
+	}
+	switch key {
+	case "enter", " ":
+		if m.target < 0 {
+			m.fail("先按数字选目标")
+			return nil
+		}
+		if len(m.picked) >= 3 {
+			m.page = 0
+			m.step = stepRequest
+			return nil
+		}
+		m.submitCombo(o)
+	case "esc":
+		m.reset()
+		m.say()
+	}
+	return nil
+}
+
+func (m *Model) submitCombo(o engine.Observation) {
+	m.act(engine.Action{
+		Type: engine.Play, Seat: o.Seat, CardIDs: cardIDs(m.picked), Target: m.target,
+	})
+	m.reset()
+}
+
+// requestOptions 是三张组合可以要的牌，按色板顺序排。
+var requestOptions = []engine.Kind{
+	engine.Defuse, engine.Nope, engine.Attack, engine.Skip,
+	engine.Favor, engine.Shuffle, engine.SeeTheFuture,
+	engine.TacoCat, engine.Cattermelon, engine.HairyPotatoCat,
+	engine.BeardCat, engine.RainbowCat,
+}
+
+func (m *Model) handleRequest(key string) tea.Cmd {
+	o := m.obs()
+	if idx, ok := digit(key); ok {
+		page, _ := m.requestPage()
+		if idx < 0 || idx >= len(page) {
+			return nil
+		}
+		m.act(engine.Action{
+			Type: engine.Play, Seat: o.Seat, CardIDs: cardIDs(m.picked),
+			Target: m.target, Requested: page[idx],
+		})
+		m.reset()
+	}
+	switch key {
+	case "esc":
+		m.reset()
+	}
+	return nil
+}
+
+// requestPage 把可要的牌种切成每页 9 个（数字键只有 1-9）。
+func (m *Model) requestPage() ([]engine.Kind, int) {
+	const size = 9
+	pages := (len(requestOptions) + size - 1) / size
+	if pages < 1 {
+		pages = 1
+	}
+	if m.page >= pages {
+		m.page = pages - 1
+	}
+	start := m.page * size
+	end := start + size
+	if end > len(requestOptions) {
+		end = len(requestOptions)
+	}
+	return requestOptions[start:end], pages
+}
+
+func cardIDs(cards []engine.Card) []int {
+	out := make([]int, 0, len(cards))
+	for _, c := range cards {
+		out = append(out, c.ID)
+	}
+	return out
+}
+
+// handleResponding：反制窗口。按数字选一张反制牌，或 P 放弃。
+func (m *Model) handleResponding(key string) tea.Cmd {
+	o := m.obs()
+	if o.Pending != nil && o.Seat < len(o.Pending.Passed) && o.Pending.Passed[o.Seat] {
+		m.fail("你已经放弃这次响应")
+		return nil
+	}
+	if idx, ok := digit(key); ok {
+		page, _ := m.pageCards()
+		if idx >= len(page) {
+			return nil
+		}
+		c := page[idx]
+		if c.Kind != engine.Nope {
+			m.fail("响应只能打反制（紫色那张）")
+			return nil
+		}
+		m.act(engine.Action{Type: engine.PlayNope, Seat: o.Seat, CardIDs: []int{c.ID}, Target: -1})
+		return nil
+	}
+	if key == "p" {
+		m.act(engine.Action{Type: engine.Pass, Seat: o.Seat, Target: -1})
+	}
+	return nil
+}
+
+// handleGiving：别人索要，我选一张交出去。
+func (m *Model) handleGiving(key string) tea.Cmd {
+	o := m.obs()
+	if o.Pending == nil || o.Pending.Action.Target != o.Seat {
+		return nil
+	}
+	if idx, ok := digit(key); ok {
+		page, _ := m.pageCards()
+		if idx >= len(page) {
+			return nil
+		}
+		m.act(engine.Action{Type: engine.Give, Seat: o.Seat, CardIDs: []int{page[idx].ID}, Target: -1})
+	}
+	return nil
+}
+
+// handleReinserting：拆弹两步走。第一步选牌，第二步选位置。
+func (m *Model) handleReinserting(key string) tea.Cmd {
+	o := m.obs()
+	if o.Turn != o.Seat {
+		return nil
+	}
+	if m.step == stepDefusePos {
+		return m.handleDefusePos(key)
+	}
+
+	if idx, ok := digit(key); ok {
+		page, _ := m.pageCards()
+		if idx >= len(page) {
+			return nil
+		}
+		c := page[idx]
+		if c.Kind != engine.Defuse {
+			m.fail("请选一张拆弹牌（绿色那张）")
+			return nil
+		}
+		m.picked = []engine.Card{c}
+		m.step = stepDefusePos
+		m.pos = 0
+		m.say()
+	}
+	return nil
+}
+
+func (m *Model) handleDefusePos(key string) tea.Cmd {
+	o := m.obs()
+	switch key {
+	case "-", "pageup":
+		if m.pos > 0 {
+			m.pos--
+		}
+	case "=", "pagedown":
+		if m.pos < o.DeckCount {
+			m.pos++
+		}
+	case "enter", " ":
+		if len(m.picked) == 0 {
+			m.fail("先选一张拆弹牌")
+			return nil
+		}
+		m.act(engine.Action{
+			Type: engine.UseDefuse, Seat: o.Seat,
+			CardIDs: []int{m.picked[0].ID}, Target: -1, Position: m.pos,
+		})
+		m.reset()
+	case "esc":
+		m.reset()
+	case "d", "0":
+		m.pos = 0
+	}
+	return nil
+}
+
+// digit 把 "1".."9" 变成 0..8；其它键返回 false。
+func digit(key string) (int, bool) {
+	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+		return int(key[0] - '1'), true
+	}
+	return 0, false
+}
+
+func (m *Model) toggleLayout() {
+	if m.opts.Layout == ui.LayoutCompact {
+		m.opts.Layout = ui.LayoutRich
+	} else {
+		m.opts.Layout = ui.LayoutCompact
+	}
+	if m.opts.SetLayout != nil {
+		m.opts.SetLayout(m.opts.Key, m.opts.Layout)
+	}
+}
+
+// remaining 是响应窗口还剩多少秒（向上取整），没有倒计时时返回 -1。
+func (m *Model) remaining() int {
+	if m.deadline.IsZero() {
+		return -1
+	}
+	left := time.Until(m.deadline)
+	if left <= 0 {
+		return 0
+	}
+	return int((left + time.Second - 1) / time.Second)
+}
+
+// seatName 给"你"这类称呼用。
+func (m *Model) seatName(seat int) string {
+	if seat == m.snap.MySeat {
+		return "你"
+	}
+	for _, p := range m.snap.Players {
+		if p.Seat == seat {
+			if p.Name != "" {
+				return ui.CutWidth(p.Name, 8)
+			}
+			return fmt.Sprintf("P%d", seat+1)
+		}
+	}
+	return fmt.Sprintf("P%d", seat+1)
+}
+
+// isPicked 判断这张牌是不是已经进了当前组合/拆弹选择，界面上会打标记。
+func (m *Model) isPicked(id int) bool {
+	for _, c := range m.picked {
+		if c.ID == id {
+			return true
+		}
+	}
+	return false
 }

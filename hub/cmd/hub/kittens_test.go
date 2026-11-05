@@ -19,6 +19,9 @@ func (kittensLayoutClient) Snapshot() client.Snapshot {
 	return client.Snapshot{Code: "ABC234", Phase: client.Playing, MySeat: 0, View: engine.Observe(s, 0)}
 }
 
+// TestSettingsInitializeProductionKittensLayout 确认两件事：
+//  1. 网关把界面密度偏好传给了游戏界面
+//  2. 后续快照不会把玩家在游戏里按 I 改过的选择顶掉
 func TestSettingsInitializeProductionKittensLayout(t *testing.T) {
 	for _, layout := range []ui.Layout{ui.LayoutRich, ui.LayoutCompact} {
 		saved := layout
@@ -32,12 +35,14 @@ func TestSettingsInitializeProductionKittensLayout(t *testing.T) {
 				saved = l
 			},
 		})
-		rich := func() bool { return strings.Contains(m.View(), "triple") }
+
+		// 丰富模式有右侧栏（"出牌记录"），极简模式没有
+		rich := func() bool { return strings.Contains(m.View(), "出牌记录") }
 		if rich() != (layout == ui.LayoutRich) {
-			t.Fatal("production UI did not receive display setting")
+			t.Fatalf("production UI did not receive display setting (layout=%v)", layout)
 		}
+
 		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
-		m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		m.Update(client.SnapshotMsg(kittensLayoutClient{}.Snapshot()))
 		if saved == layout || rich() != (saved == ui.LayoutRich) {
 			t.Fatal("snapshot overwrote game-local choice")
