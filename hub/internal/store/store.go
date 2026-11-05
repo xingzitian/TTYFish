@@ -142,6 +142,12 @@ CREATE TABLE IF NOT EXISTS uno_pt_rewards (
   score INTEGER NOT NULL CHECK(typeof(score) = 'integer' AND score >= 0),
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS kittens_pt_rewards (
+  match_id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  score INTEGER NOT NULL CHECK(typeof(score) = 'integer' AND score >= 0),
+  created_at INTEGER NOT NULL
+);
 `
 
 // Open 打开（必要时创建）数据库。

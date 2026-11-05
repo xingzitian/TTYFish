@@ -34,6 +34,7 @@ type State struct {
 	Pending        *Effect  `json:"pending,omitempty"`
 	Kitten         *Card    `json:"kitten,omitempty"`
 	Future         [][]Card `json:"future"`
+	PeekSeq        int      `json:"peek_seq"`
 	Log            []Event  `json:"log,omitempty"`
 	LogSeq         int      `json:"log_seq"`
 }

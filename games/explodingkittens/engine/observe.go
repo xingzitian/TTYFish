@@ -16,9 +16,13 @@ type Observation struct {
 	BombsLeft int    `json:"bombs_left"`
 	Discard   []Card `json:"discard"`
 	// DiscardBy 是最后一张弃牌的出牌人，-1 表示还没有弃牌。
-	DiscardBy int     `json:"discard_by"`
-	Future    []Card  `json:"future,omitempty"`
-	Pending   *Effect `json:"pending,omitempty"`
+	DiscardBy int    `json:"discard_by"`
+	Future    []Card `json:"future,omitempty"`
+	// Public peek metadata identifies a resolved effect even if intermediate
+	// response snapshots were dropped. Card contents remain private.
+	PeekSeat int     `json:"peek_seat"`
+	PeekSeq  int     `json:"peek_seq"`
+	Pending  *Effect `json:"pending,omitempty"`
 }
 
 // Observe never exposes the deck order, other hands, random seed, removed
@@ -30,6 +34,11 @@ func Observe(s *State, seat int) Observation {
 		Alive: append([]bool(nil), s.Alive...), HandCounts: make([]int, len(s.Hands)),
 		DeckCount: len(s.Deck), Discard: append([]Card(nil), s.Discard...),
 		DiscardBy: s.DiscardBy,
+		PeekSeat:  -1, PeekSeq: s.PeekSeq,
+	}
+	if s.Phase == Playing && s.Turn >= 0 && s.Turn < len(s.Future) &&
+		len(s.Future[s.Turn]) > 0 {
+		o.PeekSeat = s.Turn
 	}
 	for i, hand := range s.Hands {
 		o.HandCounts[i] = len(hand)

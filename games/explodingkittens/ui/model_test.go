@@ -132,8 +132,7 @@ func TestPairDrawAutoDetects(t *testing.T) {
 	if m.step != stepTarget {
 		t.Fatalf("按 G 应该进入选目标，实际 step=%v", m.step)
 	}
-	press(m, "2") // 座位 1
-	press(m, "enter")
+	press(m, "1") // 第一个可选对手（座位 1），数字直选
 	if c.last.Type != engine.Play || len(c.last.CardIDs) != 2 || c.last.Target != 1 {
 		t.Fatalf("对子盲抽动作不对：%+v", c.last)
 	}
@@ -367,10 +366,14 @@ func TestLobbyStartAndBot(t *testing.T) {
 	}
 }
 
-// TestChatKey 按 T 发快捷语。
+// TestChatKey T opens the preset chooser; a number sends the selected message.
 func TestChatKey(t *testing.T) {
 	m, c := newTestModel(t, playingObs(engine.Card{ID: 1, Kind: engine.Skip}), client.Playing)
 	press(m, "t")
+	if c.chat != 0 || m.step != stepChat {
+		t.Fatal("T should open the chat chooser without sending")
+	}
+	press(m, "1")
 	if c.chat != 1 {
 		t.Fatalf("T 应该发一条快捷语，实际 %d", c.chat)
 	}

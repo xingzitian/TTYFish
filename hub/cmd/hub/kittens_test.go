@@ -36,7 +36,8 @@ func TestSettingsInitializeProductionKittensLayout(t *testing.T) {
 			},
 		})
 
-		// 丰富模式有右侧栏（"出牌记录"），极简模式没有
+		m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+		// 丰富模式在足够宽时有右侧栏，窄屏降级不改变偏好。
 		rich := func() bool { return strings.Contains(m.View(), "出牌记录") }
 		if rich() != (layout == ui.LayoutRich) {
 			t.Fatalf("production UI did not receive display setting (layout=%v)", layout)
@@ -46,6 +47,14 @@ func TestSettingsInitializeProductionKittensLayout(t *testing.T) {
 		m.Update(client.SnapshotMsg(kittensLayoutClient{}.Snapshot()))
 		if saved == layout || rich() != (saved == ui.LayoutRich) {
 			t.Fatal("snapshot overwrote game-local choice")
+		}
+		m.Update(tea.WindowSizeMsg{Width: 60, Height: 24})
+		if rich() {
+			t.Fatal("narrow window did not hide the side panel")
+		}
+		m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+		if rich() != (saved == ui.LayoutRich) {
+			t.Fatal("narrow fallback overwrote layout preference")
 		}
 	}
 }

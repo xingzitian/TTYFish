@@ -46,7 +46,7 @@ func run() error {
 	defer st.Close()
 	games, err := play.New([]play.Game{
 		{ID: "uno", Rules: uno.New(engine.Rules{Challenge: true, UnoPenalty: true}), Codec: protocol.Codec{}, Settle: play.UNORewards(st)},
-		{ID: kittens.ID, Rules: kittens.Game{}, Codec: kitprotocol.Codec{}},
+		{ID: kittens.ID, Rules: kittens.Game{}, Codec: kitprotocol.Codec{}, Settle: play.KittensRewards(st)},
 	}, room.Options{})
 	if err != nil {
 		return err

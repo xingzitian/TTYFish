@@ -43,6 +43,7 @@ func Apply(s *State, a Action) error {
 		return ErrPhase
 	}
 	oldPhase := s.Phase
+	oldPending := s.Pending
 	var kind Kind
 	if a.Type == Play && a.Seat >= 0 && a.Seat < len(s.Hands) && len(a.CardIDs) > 0 {
 		for _, card := range s.Hands[a.Seat] {
@@ -76,7 +77,10 @@ func Apply(s *State, a Action) error {
 			text += "，索要" + a.Requested.Name()
 		}
 	case PlayNope:
-		text = "打出反制"
+		text = "打出否决，原效果将被取消（仍可反否决）"
+		if s.Pending.Nopes%2 == 0 {
+			text = "打出反否决，原效果将恢复（仍可否决）"
+		}
 	case Give:
 		text = "交出了一张牌"
 	case UseDefuse:
@@ -84,6 +88,11 @@ func Apply(s *State, a Action) error {
 	case Pass:
 		if oldPhase == Responding && s.Phase != Responding {
 			text = "反制窗口结束"
+			if oldPending != nil && oldPending.Nopes%2 == 1 {
+				text += "，" + oldPending.Kind.Name() + "效果已取消"
+			} else if oldPending != nil {
+				text += "，" + oldPending.Kind.Name() + "效果已生效"
+			}
 		}
 	}
 	if text != "" {
@@ -276,6 +285,7 @@ func (s *State) resolve() {
 			s.shuffle()
 		case SeeTheFuture:
 			s.Future[a.Seat] = append([]Card(nil), s.Deck[:min(3, len(s.Deck))]...)
+			s.PeekSeq++
 		case Favor:
 			s.Phase = Giving
 			return

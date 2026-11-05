@@ -12,6 +12,18 @@ type UNORewardRepository interface {
 }
 
 func UNORewards(repo UNORewardRepository) func(room.MatchResult) error {
+	return accountRewards(repo.AwardUNO)
+}
+
+type KittensRewardRepository interface {
+	AwardKittens(matchID, accountID string, score int64) error
+}
+
+func KittensRewards(repo KittensRewardRepository) func(room.MatchResult) error {
+	return accountRewards(repo.AwardKittens)
+}
+
+func accountRewards(award func(string, string, int64) error) func(room.MatchResult) error {
 	return func(result room.MatchResult) error {
 		// Native bots have no account; disconnected humans retain their identity.
 		if result.Identity == "" {
@@ -19,8 +31,8 @@ func UNORewards(repo UNORewardRepository) func(room.MatchResult) error {
 		}
 		accountID, ok := strings.CutPrefix(result.Identity, "account:")
 		if !ok || accountID == "" {
-			return fmt.Errorf("UNO reward requires an account identity")
+			return fmt.Errorf("PT reward requires an account identity")
 		}
-		return repo.AwardUNO(result.ID, accountID, result.Score)
+		return award(result.ID, accountID, result.Score)
 	}
 }

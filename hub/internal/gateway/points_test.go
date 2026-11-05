@@ -12,6 +12,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	kittens "github.com/xingzitian/TTYFish/games/explodingkittens"
+	kitengine "github.com/xingzitian/TTYFish/games/explodingkittens/engine"
 	"github.com/xingzitian/TTYFish/games/uno"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
 	"github.com/xingzitian/TTYFish/hub/internal/backend"
@@ -103,6 +105,12 @@ func TestPointsErrorDoesNotClearBalance(t *testing.T) {
 var _ = tea.Quit
 
 func TestSettlementRefreshesPersistedPointsInsideRoom(t *testing.T) {
+	t.Run("UNO", func(t *testing.T) { testSettlementRefresh(t, false) })
+	t.Run("ExplodingKittens", func(t *testing.T) { testSettlementRefresh(t, true) })
+}
+
+func testSettlementRefresh(t *testing.T, isKittens bool) {
+	t.Helper()
 	st, err := store.Open(filepath.Join(t.TempDir(), "points.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -132,9 +140,19 @@ func TestSettlementRefreshesPersistedPointsInsideRoom(t *testing.T) {
 	}))
 	defer server.Close()
 	identity := "account:" + a.ID
-	rm := room.New("ABC234", pointsUNO{uno.New(engine.Rules{})}, room.Options{
-		NoLoop: true, OnMatchEnd: play.UNORewards(st),
-	})
+	var rules game.Game = pointsUNO{uno.New(engine.Rules{})}
+	settle := play.UNORewards(st)
+	var action any = engine.PlayCard{Seat: 0, CardID: 91}
+	actor := identity
+	firstPT, secondPT := "10.0", "20.0"
+	if isKittens {
+		rules = pointsKittens{}
+		settle = play.KittensRewards(st)
+		action = kitengine.Action{Type: kitengine.Draw, Seat: 1}
+		actor = "account:bob"
+		firstPT, secondPT = "5.0", "10.0"
+	}
+	rm := room.New("ABC234", rules, room.Options{NoLoop: true, OnMatchEnd: settle})
 	defer rm.Close()
 	for _, player := range []string{identity, "account:bob"} {
 		if _, err := rm.Join(player, player); err != nil {
@@ -156,7 +174,7 @@ func TestSettlementRefreshesPersistedPointsInsideRoom(t *testing.T) {
 	}
 	win := func() client.SnapshotMsg {
 		t.Helper()
-		if err := rm.Act(identity, engine.PlayCard{Seat: 0, CardID: 91}); err != nil {
+		if err := rm.Act(actor, action); err != nil {
 			t.Fatal(err)
 		}
 		return client.SnapshotMsg(<-updates)
@@ -181,7 +199,7 @@ func TestSettlementRefreshesPersistedPointsInsideRoom(t *testing.T) {
 	}
 	r.Update(cmd())
 	r.Update(oldQuery)
-	if r.level != levelTable || r.roomClient == nil || !strings.Contains(strip(r.View()), "10.0pt") {
+	if r.level != levelTable || r.roomClient == nil || !strings.Contains(strip(r.View()), firstPT+"pt") {
 		t.Fatalf("persisted balance not shown without leaving: %s", strip(r.View()))
 	}
 	if model.forward != forwarded+2 {
@@ -196,9 +214,19 @@ func TestSettlementRefreshesPersistedPointsInsideRoom(t *testing.T) {
 	win()
 	_, cmd = r.Update(start())
 	r.Update(cmd())
-	if r.balancePT != "20.0" || queries != 3 {
+	if r.balancePT != secondPT || queries != 3 {
 		t.Fatalf("balance=%s queries=%d", r.balancePT, queries)
 	}
+}
+
+type pointsKittens struct{ kittens.Game }
+
+func (g pointsKittens) NewMatch(players []game.PlayerSeed, seed int64) any {
+	s := g.Game.NewMatch(players, seed).(*kitengine.State)
+	s.Turn = 1
+	s.Hands[1] = nil
+	s.Deck = []kitengine.Card{{ID: 100, Kind: kitengine.ExplodingKitten}}
+	return s
 }
 
 type pointsUNO struct{ uno.Game }

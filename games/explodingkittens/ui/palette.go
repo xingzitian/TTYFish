@@ -31,15 +31,15 @@ var palettes = map[engine.Kind]cardStyle{
 	engine.ExplodingKitten: {"炸弹", "爆炸猫", "196", "231", 0},
 	engine.Defuse:          {"保命", "拆弹", "41", "16", 1},
 
-	engine.Nope:         {"功能", "否决", "129", "231", 3},
+	engine.Nope:         {"功能", "否决", "208", "16", 3},
 	engine.Attack:       {"功能", "攻击", "208", "16", 4},
-	engine.Skip:         {"功能", "跳过", "220", "16", 5},
-	engine.Favor:        {"功能", "索要", "44", "16", 6},
-	engine.Shuffle:      {"功能", "洗牌", "33", "231", 7},
-	engine.SeeTheFuture: {"功能", "预言", "75", "16", 8},
+	engine.Skip:         {"功能", "跳过", "208", "16", 5},
+	engine.Favor:        {"功能", "索要", "208", "16", 6},
+	engine.Shuffle:      {"功能", "洗牌", "208", "16", 7},
+	engine.SeeTheFuture: {"功能", "预言", "208", "16", 8},
 
 	// 五只猫：每类一个颜色，名字保持原版图案名
-	engine.TacoCat:        {"猫牌", "卷饼", "208", "16", 10},
+	engine.TacoCat:        {"猫牌", "卷饼", "215", "16", 10},
 	engine.Cattermelon:    {"猫牌", "西瓜", "77", "16", 11},
 	engine.HairyPotatoCat: {"猫牌", "土豆", "180", "16", 12},
 	engine.BeardCat:       {"猫牌", "胡子", "139", "16", 13},
