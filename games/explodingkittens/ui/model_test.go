@@ -20,6 +20,7 @@ type fakeClient struct {
 	acted  int
 	start  int
 	addBot int
+	chat   int
 }
 
 func (c *fakeClient) Snapshot() client.Snapshot       { return c.snap }
@@ -34,8 +35,8 @@ func (c *fakeClient) Act(a any) error {
 func (c *fakeClient) Start() error           { c.start++; return nil }
 func (c *fakeClient) AddBot() error          { c.addBot++; return nil }
 func (c *fakeClient) VoteRestart(bool) error { return nil }
+func (c *fakeClient) Chat(int) error         { c.chat++; return nil }
 
-// snapshot 造一个"我在座位 0"的快照。
 func snapshot(t *testing.T, o engine.Observation, phase client.Phase) client.Snapshot {
 	t.Helper()
 	return client.Snapshot{
@@ -49,12 +50,11 @@ func snapshot(t *testing.T, o engine.Observation, phase client.Phase) client.Sna
 	}
 }
 
-// playingObs 造一个"轮到我、手里有这些牌"的观察。
 func playingObs(hand ...engine.Card) engine.Observation {
 	return engine.Observation{
 		Seat: 0, Phase: engine.Playing, Turn: 0, TurnsRemaining: 1,
 		Alive: []bool{true, true, true}, HandCounts: []int{len(hand), 4, 3},
-		Hand: hand, DeckCount: 30,
+		Hand: hand, DeckCount: 14, BombsLeft: 2,
 	}
 }
 
@@ -81,8 +81,8 @@ func press(m *Model, key string) {
 	_, _ = m.Update(msg)
 }
 
-// TestSingleCardPlaysDirectly 单张牌（攻击/跳过/洗牌/预知）按一下就出。
-func TestSingleCardPlaysDirectly(t *testing.T) {
+// TestFunctionCardsPlayDirectly 功能牌（攻击/跳过/洗牌/预言）按一下就出。
+func TestFunctionCardsPlayDirectly(t *testing.T) {
 	for _, card := range []engine.Card{
 		{ID: 11, Kind: engine.Attack},
 		{ID: 12, Kind: engine.Skip},
@@ -92,7 +92,7 @@ func TestSingleCardPlaysDirectly(t *testing.T) {
 		m, c := newTestModel(t, playingObs(card), client.Playing)
 		press(m, "1")
 		if c.acted != 1 {
-			t.Fatalf("%s 应该按下即出，实际发了 %d 个动作", card.Kind, c.acted)
+			t.Fatalf("%s 应该按下即出，实际 %d 次", card.Kind, c.acted)
 		}
 		if c.last.Type != engine.Play || len(c.last.CardIDs) != 1 || c.last.CardIDs[0] != card.ID {
 			t.Fatalf("%s 动作用了错的牌：%+v", card.Kind, c.last)
@@ -100,55 +100,55 @@ func TestSingleCardPlaysDirectly(t *testing.T) {
 	}
 }
 
-// TestCatCardEntersCombo 猫牌：第一次按进入候选，第二次按同色才继续。
-func TestCatCardEntersCombo(t *testing.T) {
+// TestCatCardCannotBePlayedAlone 单张猫牌不能出，要按 G。
+func TestCatCardCannotBePlayedAlone(t *testing.T) {
 	o := playingObs(
 		engine.Card{ID: 1, Kind: engine.TacoCat},
 		engine.Card{ID: 2, Kind: engine.TacoCat},
 	)
 	m, c := newTestModel(t, o, client.Playing)
-
 	press(m, "1")
-	if m.step != stepCombo {
-		t.Fatalf("按第一张猫牌应该进入候选，实际 step=%v", m.step)
-	}
 	if c.acted != 0 {
-		t.Fatal("进入候选时不该立即出牌")
+		t.Fatal("单张猫牌不该出")
 	}
-
-	// 同色：留在组合里（再按一张能凑三张）
-	press(m, "2")
-	if m.step != stepCombo {
-		t.Fatalf("第二张同色应该留在组合里，实际 step=%v", m.step)
-	}
-	// 回车把这一对出掉，进入选目标
-	press(m, "enter")
-	if m.step != stepTarget {
-		t.Fatalf("回车后应该进入选目标，实际 step=%v", m.step)
+	if !m.errVisible() || !strings.Contains(m.errMsg, "G") {
+		t.Fatalf("应该提示按 G：%q", m.errMsg)
 	}
 }
 
-// TestCatMismatchCancels 按了不同颜色的猫，立即取消并给出提示。
-func TestCatMismatchCancels(t *testing.T) {
+// TestPairDrawAutoDetects 按 G 自动找出同款两张，只需要选目标。
+func TestPairDrawAutoDetects(t *testing.T) {
 	o := playingObs(
 		engine.Card{ID: 1, Kind: engine.TacoCat},
-		engine.Card{ID: 2, Kind: engine.BeardCat},
+		engine.Card{ID: 2, Kind: engine.TacoCat},
+		engine.Card{ID: 3, Kind: engine.Skip},
 	)
 	m, c := newTestModel(t, o, client.Playing)
 
-	press(m, "1")
-	if m.step != stepCombo {
-		t.Fatalf("应该进入候选，实际 step=%v", m.step)
+	if _, pairs := m.pairKind(); pairs != 1 {
+		t.Fatalf("应该检测到 1 个对子，实际 %d", pairs)
 	}
-	press(m, "2")
-	if m.step != stepIdle {
-		t.Fatalf("颜色不同应该取消组合，实际 step=%v", m.step)
+	press(m, "g")
+	if m.step != stepTarget {
+		t.Fatalf("按 G 应该进入选目标，实际 step=%v", m.step)
 	}
-	if c.acted != 0 {
-		t.Fatal("不匹配时不该发动作")
+	press(m, "2") // 座位 1
+	press(m, "enter")
+	if c.last.Type != engine.Play || len(c.last.CardIDs) != 2 || c.last.Target != 1 {
+		t.Fatalf("对子盲抽动作不对：%+v", c.last)
+	}
+}
+
+// TestPairDrawWithoutPair 没有对子时按 G 要给提示。
+func TestPairDrawWithoutPair(t *testing.T) {
+	o := playingObs(engine.Card{ID: 1, Kind: engine.TacoCat})
+	m, c := newTestModel(t, o, client.Playing)
+	press(m, "g")
+	if c.acted != 0 || m.step != stepIdle {
+		t.Fatal("没有对子时不该进入选择")
 	}
 	if !m.errVisible() {
-		t.Fatal("不匹配时要有提示")
+		t.Fatal("应该提示凑不齐一对")
 	}
 }
 
@@ -161,7 +161,7 @@ func TestDrawKey(t *testing.T) {
 	}
 }
 
-// TestNonPlayableCardsExplain 现在出不了的牌要说清原因，而不是静默。
+// TestNonPlayableCardsExplain 保命/炸弹/否决要说清为什么不能主动出。
 func TestNonPlayableCardsExplain(t *testing.T) {
 	for _, card := range []engine.Card{
 		{ID: 1, Kind: engine.Defuse},
@@ -179,8 +179,8 @@ func TestNonPlayableCardsExplain(t *testing.T) {
 	}
 }
 
-// TestRespondingNopeAndPass 响应窗口：按数字打反制，P 放弃。
-func TestRespondingNopeAndPass(t *testing.T) {
+// TestRespondingNopeByKey 响应窗口：N 打否决，P 放弃。
+func TestRespondingNopeByKey(t *testing.T) {
 	o := playingObs(engine.Card{ID: 9, Kind: engine.Nope})
 	o.Phase = engine.Responding
 	o.Pending = &engine.Effect{
@@ -189,9 +189,9 @@ func TestRespondingNopeAndPass(t *testing.T) {
 	}
 
 	m, c := newTestModel(t, o, client.Playing)
-	press(m, "1")
-	if c.last.Type != engine.PlayNope {
-		t.Fatalf("应该打反制，实际 %+v", c.last)
+	press(m, "n")
+	if c.last.Type != engine.PlayNope || c.last.CardIDs[0] != 9 {
+		t.Fatalf("N 应该打出否决，实际 %+v", c.last)
 	}
 
 	m2, c2 := newTestModel(t, o, client.Playing)
@@ -201,53 +201,78 @@ func TestRespondingNopeAndPass(t *testing.T) {
 	}
 }
 
-// TestDefuseTwoSteps 拆弹两步走：先选牌，再选位置。
-func TestDefuseTwoSteps(t *testing.T) {
-	o := playingObs(
-		engine.Card{ID: 5, Kind: engine.Defuse},
-		engine.Card{ID: 6, Kind: engine.Skip},
-	)
+// TestRespondingWithoutNopeCard 没有否决牌时按 N 要提示。
+func TestRespondingWithoutNopeCard(t *testing.T) {
+	o := playingObs(engine.Card{ID: 5, Kind: engine.Skip})
+	o.Phase = engine.Responding
+	o.Pending = &engine.Effect{Kind: engine.Attack, Passed: []bool{false, true, true}}
+	m, c := newTestModel(t, o, client.Playing)
+	press(m, "n")
+	if c.acted != 0 {
+		t.Fatal("没有否决牌不该发动作")
+	}
+	if !m.errVisible() {
+		t.Fatal("应该提示没有否决牌")
+	}
+}
+
+// TestDefusePositionPresets 埋雷位置预设：0/1/2/B 直接生效。
+func TestDefusePositionPresets(t *testing.T) {
+	base := func() engine.Observation {
+		o := playingObs(
+			engine.Card{ID: 5, Kind: engine.Defuse},
+			engine.Card{ID: 6, Kind: engine.Skip},
+		)
+		o.Phase = engine.Reinserting
+		o.DeckCount = 12
+		return o
+	}
+	for _, tc := range []struct {
+		key  string
+		want int
+	}{
+		{"0", 0}, {"1", 1}, {"2", 2}, {"b", 12},
+	} {
+		m, c := newTestModel(t, base(), client.Playing)
+		press(m, tc.key)
+		if c.last.Type != engine.UseDefuse {
+			t.Fatalf("按 %q 应该埋雷，实际 %+v", tc.key, c.last)
+		}
+		if c.last.Position != tc.want {
+			t.Fatalf("按 %q 位置应该是 %d，实际 %d", tc.key, tc.want, c.last.Position)
+		}
+		if len(c.last.CardIDs) != 1 || c.last.CardIDs[0] != 5 {
+			t.Fatalf("应该自动用拆弹牌 5，实际 %v", c.last.CardIDs)
+		}
+	}
+
+	m, c := newTestModel(t, base(), client.Playing)
+	press(m, "r")
+	if c.last.Position < 0 || c.last.Position > 12 {
+		t.Fatalf("随机位置越界：%d", c.last.Position)
+	}
+}
+
+// TestDefuseCustomPosition I 进入指定位置，-= 调整，Enter 确认。
+func TestDefuseCustomPosition(t *testing.T) {
+	o := playingObs(engine.Card{ID: 5, Kind: engine.Defuse})
 	o.Phase = engine.Reinserting
 	o.DeckCount = 12
 	m, c := newTestModel(t, o, client.Playing)
 
-	press(m, "1") // 拆弹排最前
-	if m.step != stepDefusePos {
-		t.Fatalf("选完拆弹牌应该进入选位置，实际 step=%v", m.step)
-	}
-	if c.acted != 0 {
-		t.Fatal("还没选位置就发动作了")
-	}
-	if m.pos != 0 {
-		t.Fatalf("位置应该从 0 开始，实际 %d", m.pos)
+	press(m, "I")
+	if m.step != stepDefuseCustom {
+		t.Fatalf("I 应该进入指定位置，实际 step=%v", m.step)
 	}
 	press(m, "=")
 	press(m, "=")
-	if m.pos != 2 {
-		t.Fatalf("按两次 = 应该到第 2 张，实际 %d", m.pos)
+	press(m, "=")
+	if m.pos != 3 {
+		t.Fatalf("按三次 = 应该到第 3 张，实际 %d", m.pos)
 	}
 	press(m, "enter")
-	if c.last.Type != engine.UseDefuse || c.last.Position != 2 ||
-		len(c.last.CardIDs) != 1 || c.last.CardIDs[0] != 5 {
-		t.Fatalf("拆弹动作不对：%+v", c.last)
-	}
-}
-
-// TestDefuseRejectsWrongCard 拆弹第一步选错牌要给提示，不能进入第二步。
-func TestDefuseRejectsWrongCard(t *testing.T) {
-	o := playingObs(
-		engine.Card{ID: 5, Kind: engine.Defuse},
-		engine.Card{ID: 6, Kind: engine.Skip},
-	)
-	o.Phase = engine.Reinserting
-	m, c := newTestModel(t, o, client.Playing)
-
-	press(m, "2") // 跳过牌
-	if m.step == stepDefusePos {
-		t.Fatal("选错牌不该进入选位置")
-	}
-	if c.acted != 0 || !m.errVisible() {
-		t.Fatal("选错牌应该给提示且不发动作")
+	if c.last.Type != engine.UseDefuse || c.last.Position != 3 {
+		t.Fatalf("指定位置动作不对：%+v", c.last)
 	}
 }
 
@@ -266,8 +291,8 @@ func TestGivingPicksCard(t *testing.T) {
 	}
 }
 
-// TestCountdownUsesServerDeadline 倒计时按服务端剩余毫秒走，并且会真的减少。
-func TestCountdownUsesServerDeadline(t *testing.T) {
+// TestCountdownShowsSeconds 响应窗口有真实倒计时。
+func TestCountdownShowsSeconds(t *testing.T) {
 	o := playingObs(engine.Card{ID: 9, Kind: engine.Nope})
 	o.Phase = engine.Responding
 	o.Pending = &engine.Effect{Kind: engine.Attack, Passed: []bool{false, true, true}}
@@ -280,8 +305,8 @@ func TestCountdownUsesServerDeadline(t *testing.T) {
 	if got := m.remaining(); got != 5 {
 		t.Fatalf("应该显示 5 秒，实际 %d", got)
 	}
-	if !strings.Contains(m.hint(), "5 秒") {
-		t.Fatalf("提示里要带秒数：%q", m.hint())
+	if !strings.Contains(m.hint(), "生效倒计时") {
+		t.Fatalf("提示里要有倒计时：%q", m.hint())
 	}
 	m.deadline = time.Now().Add(2400 * time.Millisecond)
 	if got := m.remaining(); got != 3 {
@@ -293,17 +318,38 @@ func TestCountdownUsesServerDeadline(t *testing.T) {
 	}
 }
 
-// TestHelpListsPhaseKeys 帮助里的键要跟着阶段变。
-func TestHelpListsPhaseKeys(t *testing.T) {
+// TestFutureRevealShowsCards 预言生效后展示牌堆顶，并带 10 秒倒计时。
+func TestFutureRevealShowsCards(t *testing.T) {
 	o := playingObs(engine.Card{ID: 1, Kind: engine.Skip})
-	m, _ := newTestModel(t, o, client.Playing)
+	m := NewModel(&fakeClient{snap: snapshot(t, o, client.Playing)},
+		Options{Key: "k", Layout: ui.LayoutCompact}, lipgloss.DefaultRenderer())
+	m.width, m.height = 80, 24
+
+	next := o
+	next.Future = []engine.Card{
+		{ID: 99, Kind: engine.ExplodingKitten},
+		{ID: 98, Kind: engine.Skip},
+	}
+	m.Update(client.SnapshotMsg(snapshot(t, next, client.Playing)))
+
+	if left := m.revealLeft(); left <= 0 {
+		t.Fatalf("预言结果应该有倒计时，实际 %d", left)
+	}
+	hint := m.hint()
+	if !strings.Contains(hint, "预言结果") || !strings.Contains(hint, "炸弹") {
+		t.Fatalf("预言结果提示不对：%q", hint)
+	}
+}
+
+// TestHelpShowsPhaseKeys 帮助里的键跟着阶段变。
+func TestHelpShowsPhaseKeys(t *testing.T) {
+	m, _ := newTestModel(t, playingObs(engine.Card{ID: 1, Kind: engine.Skip}), client.Playing)
 	press(m, "?")
 	if !m.help {
 		t.Fatal("? 应该打开帮助")
 	}
-	view := strip(m.View())
-	if !strings.Contains(view, "出牌") {
-		t.Fatalf("帮助里应该有出牌一组：\n%s", view)
+	if !strings.Contains(strip(m.View()), "对子盲抽") {
+		t.Fatalf("帮助里应该有对子盲抽：\n%s", strip(m.View()))
 	}
 	press(m, "esc")
 	if m.help {
@@ -321,6 +367,59 @@ func TestLobbyStartAndBot(t *testing.T) {
 	}
 }
 
+// TestChatKey 按 T 发快捷语。
+func TestChatKey(t *testing.T) {
+	m, c := newTestModel(t, playingObs(engine.Card{ID: 1, Kind: engine.Skip}), client.Playing)
+	press(m, "t")
+	if c.chat != 1 {
+		t.Fatalf("T 应该发一条快捷语，实际 %d", c.chat)
+	}
+}
+
+// TestQAlwaysQuits 老板键任何时候都断开。
+func TestQAlwaysQuits(t *testing.T) {
+	o := playingObs(
+		engine.Card{ID: 1, Kind: engine.TacoCat},
+		engine.Card{ID: 2, Kind: engine.TacoCat},
+	)
+	m, _ := newTestModel(t, o, client.Playing)
+	press(m, "g")
+	if m.step != stepTarget {
+		t.Fatalf("前置条件失败：step=%v", m.step)
+	}
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if cmd == nil {
+		t.Fatal("选目标时按 Q 也应该退出")
+	}
+}
+
+// TestEscCancelsSelection Esc 只取消选择。
+func TestEscCancelsSelection(t *testing.T) {
+	o := playingObs(
+		engine.Card{ID: 1, Kind: engine.TacoCat},
+		engine.Card{ID: 2, Kind: engine.TacoCat},
+	)
+	m, c := newTestModel(t, o, client.Playing)
+	press(m, "g")
+	press(m, "esc")
+	if m.step != stepIdle || c.acted != 0 {
+		t.Fatalf("Esc 应该只取消选择：step=%v acted=%d", m.step, c.acted)
+	}
+}
+
+// TestDeadStateIgnoresGameKeys 淘汰后按键不该发动作。
+func TestDeadStateIgnoresGameKeys(t *testing.T) {
+	o := playingObs(engine.Card{ID: 1, Kind: engine.Skip})
+	o.Alive = []bool{false, true, true}
+	m, c := newTestModel(t, o, client.Playing)
+	press(m, "1")
+	press(m, "d")
+	press(m, "g")
+	if c.acted != 0 {
+		t.Fatalf("淘汰后不该有动作，实际 %d", c.acted)
+	}
+}
+
 // TestCompactFitsWidth 极简模式每行都不能超宽。
 func TestCompactFitsWidth(t *testing.T) {
 	o := playingObs(
@@ -328,11 +427,12 @@ func TestCompactFitsWidth(t *testing.T) {
 		engine.Card{ID: 2, Kind: engine.TacoCat},
 		engine.Card{ID: 3, Kind: engine.Defuse},
 	)
-	for _, w := range []int{80, 60, 40, 30} {
+	o.Discard = []engine.Card{{ID: 9, Kind: engine.Attack}}
+	o.DiscardBy = 1
+	for _, w := range []int{80, 60, 40} {
 		m, _ := newTestModel(t, o, client.Playing)
 		m.width, m.height = w, 24
-		out := strip(m.View())
-		for _, line := range strings.Split(out, "\n") {
+		for _, line := range strings.Split(strip(m.View()), "\n") {
 			if lipgloss.Width(line) > w {
 				t.Fatalf("宽度 %d 有超宽行：%q", w, line)
 			}

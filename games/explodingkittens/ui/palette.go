@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/charmbracelet/lipgloss"
@@ -11,53 +12,54 @@ import (
 
 // cardStyle 是一张牌在界面上的样子。
 //
-// 五张猫牌在规则里完全等价（凑对子/三张只认"同一种"），名字对玩家没有信息量，
-// 所以用颜色区分，名字取本地化里最直观的叫法（橘猫、三花猫……）。
+// 牌面统一写成 `[类别|名字]`：类别分「保命 / 功能 / 猫牌 / 炸弹」四类。
+// 这样即使终端不支持颜色（黑白模式、色弱、把 Colors 关掉），
+// 靠文字也能立刻分出"这张能不能救命、是不是猫牌"。
 type cardStyle struct {
-	// Label 是完整中文名，用于提示、日志这类需要说清楚的地方。
-	Label string
-	// Short 是牌面里那一个字：`[橙|橘]` 的"橘"。
-	Short string
-	// Ink 是颜色名，用于无色模式下的文字说明。
-	Ink string
-	// Bg/Fg 是 256 色里的色号。
+	// Category 是类别：保命 / 功能 / 猫牌 / 炸弹。
+	Category string
+	// Name 是牌名，取本地化短名（拆弹 / 否决 / 胡子……）。
+	Name string
+	// Bg/Fg 是 256 色号；无色模式下不生效。
 	Bg lipgloss.Color
 	Fg lipgloss.Color
-	// Rank 决定手牌排序：同类挨在一起，凑组合时一眼能看出有几张。
+	// Rank 决定手牌排序：保命在最前，功能次之，猫牌按种类聚在一起。
 	Rank int
 }
 
 var palettes = map[engine.Kind]cardStyle{
-	engine.ExplodingKitten: {"爆炸猫", "爆", "红", "196", "231", 0},
-	engine.Defuse:          {"拆弹", "拆", "绿", "41", "16", 1},
-	engine.Nope:            {"反制", "否", "紫", "129", "231", 2},
-	engine.Attack:          {"攻击", "攻", "橙", "208", "16", 3},
-	engine.Skip:            {"跳过", "跳", "黄", "220", "16", 4},
-	engine.Favor:           {"索要", "要", "青", "44", "16", 5},
-	engine.Shuffle:         {"洗牌", "洗", "蓝", "33", "231", 6},
-	engine.SeeTheFuture:    {"预知未来", "预", "蓝", "33", "231", 7},
+	engine.ExplodingKitten: {"炸弹", "爆炸猫", "196", "231", 0},
+	engine.Defuse:          {"保命", "拆弹", "41", "16", 1},
 
-	// 五只猫：颜色即身份，名字带本地化味道
-	engine.TacoCat:        {"橘猫", "橘", "橙", "208", "16", 10},
-	engine.Cattermelon:    {"三花猫", "花", "品红", "199", "231", 11},
-	engine.HairyPotatoCat: {"奶牛猫", "奶", "白", "255", "16", 12},
-	engine.BeardCat:       {"金渐层", "金", "金", "220", "16", 13},
-	engine.RainbowCat:     {"蓝猫", "蓝", "蓝", "33", "231", 14},
+	engine.Nope:         {"功能", "否决", "129", "231", 3},
+	engine.Attack:       {"功能", "攻击", "208", "16", 4},
+	engine.Skip:         {"功能", "跳过", "220", "16", 5},
+	engine.Favor:        {"功能", "索要", "44", "16", 6},
+	engine.Shuffle:      {"功能", "洗牌", "33", "231", 7},
+	engine.SeeTheFuture: {"功能", "预言", "75", "16", 8},
+
+	// 五只猫：每类一个颜色，名字保持原版图案名
+	engine.TacoCat:        {"猫牌", "卷饼", "208", "16", 10},
+	engine.Cattermelon:    {"猫牌", "西瓜", "77", "16", 11},
+	engine.HairyPotatoCat: {"猫牌", "土豆", "180", "16", 12},
+	engine.BeardCat:       {"猫牌", "胡子", "139", "16", 13},
+	engine.RainbowCat:     {"猫牌", "彩虹", "199", "231", 14},
 }
 
-// fallback 给未知牌兜底：宁可显示原名，也不要空着。
+// style 取一张牌的样式；未知牌兜底成"功能"。
 func (m *Model) style(kind engine.Kind) cardStyle {
 	if st, ok := palettes[kind]; ok {
 		return st
 	}
-	name := kind.Name()
-	return cardStyle{Label: name, Short: "?", Ink: "?", Bg: "240", Fg: "231", Rank: 99}
+	return cardStyle{Category: "功能", Name: kind.Name(), Bg: "240", Fg: "231", Rank: 99}
 }
 
-// token 画一张牌：`[橙|橘]`。块状模式是色块，文字模式只上色，无色模式是纯文本。
+// token 画一张牌：`[保命|拆弹]`。
+//
+// 块状模式：类别用底色，牌子名反白；文字模式：整段上色；无色模式：纯文本。
 func (m *Model) token(kind engine.Kind) string {
 	st := m.style(kind)
-	text := "[" + st.Ink + "|" + st.Short + "]"
+	text := "[" + st.Category + "|" + st.Name + "]"
 	switch m.opts.Mode {
 	case ui.ColorNone:
 		return text
@@ -69,11 +71,15 @@ func (m *Model) token(kind engine.Kind) string {
 	}
 }
 
-// name 是这张牌的完整名字（需要说清楚时用，例如"你摸到了爆炸猫"）。
-func (m *Model) name(kind engine.Kind) string { return m.style(kind).Label }
+// name 是牌名（不带类别），用在提示语里："你打出了 预言 牌"。
+func (m *Model) name(kind engine.Kind) string { return m.style(kind).Name }
 
-// sortHand 按 Rank 排序，同 rank 保持原来的相对顺序（ID 小在前），
-// 这样同色的猫牌永远挨在一起：按 1、2 就是一对。
+// category 是类别名，用来做"这是一张保命牌"这类说明。
+func (m *Model) category(kind engine.Kind) string { return m.style(kind).Category }
+
+// sortHand 按 Rank 排序，同 rank 保持相对顺序：
+// 保命在最前（摸到炸弹时一眼看到），功能按常用度，猫牌按种类聚在一起，
+// 于是"两张同款猫"永远相邻。
 func sortHand(hand []engine.Card) []engine.Card {
 	out := append([]engine.Card(nil), hand...)
 	sort.SliceStable(out, func(i, j int) bool {
@@ -84,4 +90,40 @@ func sortHand(hand []engine.Card) []engine.Card {
 		return out[i].ID < out[j].ID
 	})
 	return out
+}
+
+// pairKind 找出手里"有两张以上"的猫牌种类，返回种类和可用的对子数。
+// 对子盲抽靠它自动检测，玩家不用自己挑两张。
+func (m *Model) pairKind() (engine.Kind, int) {
+	counts := map[engine.Kind]int{}
+	for _, c := range m.obs().Hand {
+		if m.style(c.Kind).Category == "猫牌" {
+			counts[c.Kind]++
+		}
+	}
+	best, pairs := engine.Kind(""), 0
+	for kind, n := range counts {
+		if n/2 > 0 {
+			pairs += n / 2
+			if best == "" || palettes[kind].Rank < palettes[best].Rank {
+				best = kind
+			}
+		}
+	}
+	return best, pairs
+}
+
+// bombChance 是"下一张摸到炸弹的概率"，返回百分比字符串。
+func (m *Model) bombChance() string {
+	o := m.obs()
+	if o.DeckCount <= 0 {
+		return "—"
+	}
+	pct := float64(o.BombsLeft) / float64(o.DeckCount) * 100
+	return trimPercent(pct)
+}
+
+// trimPercent 保留一位小数。
+func trimPercent(pct float64) string {
+	return fmt.Sprintf("%.1f%%", pct)
 }

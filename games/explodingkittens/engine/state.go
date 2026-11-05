@@ -23,6 +23,7 @@ type State struct {
 	Hands          [][]Card `json:"hands"`
 	Deck           []Card   `json:"deck"`
 	Discard        []Card   `json:"discard"`
+	DiscardBy      int      `json:"discard_by"`
 	Removed        []Card   `json:"removed"`
 	Alive          []bool   `json:"alive"`
 	Turn           int      `json:"turn"`
@@ -60,7 +61,8 @@ func NewGame(seats int, seed int64) (*State, error) {
 	}
 	s := &State{
 		Seed: seed, Hands: make([][]Card, seats), Alive: make([]bool, seats),
-		Future: make([][]Card, seats), TurnsRemaining: 1, Phase: Playing, Winner: -1,
+		Future: make([][]Card, seats), TurnsRemaining: 1, Phase: Playing,
+		Winner: -1, DiscardBy: -1,
 	}
 	var kittens, defuses, deck []Card
 	for _, card := range NewDeck() {

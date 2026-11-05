@@ -197,6 +197,7 @@ func (s *State) play(a Action) error {
 	}
 	for _, card := range cards {
 		s.Discard = append(s.Discard, s.take(a.Seat, card.ID))
+		s.DiscardBy = a.Seat
 	}
 	a.CardIDs = append([]int(nil), a.CardIDs...)
 	s.Pending = &Effect{Action: a, Kind: kind, Passed: make([]bool, len(s.Alive))}
@@ -212,6 +213,7 @@ func (s *State) respond(a Action) error {
 			return ErrCard
 		}
 		s.Discard = append(s.Discard, s.take(a.Seat, cards[0].ID))
+		s.DiscardBy = a.Seat
 		s.Pending.Nopes++
 		s.Pending.Passed = make([]bool, len(s.Alive))
 	case Pass:
@@ -334,6 +336,7 @@ func (s *State) defuse(a Action) error {
 		return ErrChoice
 	}
 	s.Discard = append(s.Discard, s.take(a.Seat, cards[0].ID))
+	s.DiscardBy = a.Seat
 	s.Deck = append(s.Deck, Card{})
 	copy(s.Deck[a.Position+1:], s.Deck[a.Position:])
 	s.Deck[a.Position] = *s.Kitten

@@ -10,7 +10,7 @@ import (
 	"github.com/xingzitian/TTYFish/sdk/ui"
 )
 
-// View 是整帧入口：老板键 → 断线 → 帮助 → 大厅/牌桌。
+// View 是整帧入口：老板键 → 断线 → 帮助 → 极简/丰富。
 func (m *Model) View() string {
 	if m.boss {
 		return ui.ClampFrame("$ go test ./...\nok   ttyfish/explodingkittens (cached)\n$ ", m.width, m.height)
@@ -29,6 +29,8 @@ func (m *Model) View() string {
 	}
 	return ui.ClampFrame(m.viewRich(), m.width, m.height)
 }
+
+func lipglossWidth(s string) int { return lipgloss.Width(s) }
 
 func (m *Model) dim() lipgloss.Style {
 	s := m.renderer.NewStyle()
@@ -62,7 +64,7 @@ func (m *Model) ok() lipgloss.Style {
 	return s.Foreground(lipgloss.Color("119"))
 }
 
-// viewRich 是宽屏的三栏：左边牌桌 + 手牌，右边玩家、记录、按键入口。
+// viewRich 是宽屏：左边牌桌，右边玩家与记录。
 func (m *Model) viewRich() string {
 	panelW := m.width / 3
 	if panelW < 26 {
@@ -72,25 +74,19 @@ func (m *Model) viewRich() string {
 		panelW = 38
 	}
 	leftW := m.width - panelW - 2
-	if leftW > 80 {
-		leftW = 80
+	if leftW > 84 {
+		leftW = 84
 	}
 
-	left := []string{
-		m.richHeader(leftW),
-		m.pileLine(leftW),
-		"",
-		m.handHeader(leftW),
-	}
-	left = append(left, m.handLines(leftW)...)
-	left = append(left, "", m.statusLine(leftW), m.cmdLine(leftW))
+	left := []string{m.compactTurn(leftW), m.compactDeck(leftW)}
+	left = append(left, m.compactHand(leftW)...)
+	left = append(left, m.statusLine(leftW), m.cmdLine(leftW))
 
 	h := len(left)
 	if m.height > h {
 		h = m.height
 	}
-	right := m.sidePanel(panelW, h)
-	return lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(left, "\n"), "  ", right)
+	return lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(left, "\n"), "  ", m.sidePanel(panelW, h))
 }
 
 func (m *Model) sidePanel(width, height int) string {
@@ -99,8 +95,7 @@ func (m *Model) sidePanel(width, height int) string {
 	if rest >= 3 {
 		lines = append(lines, "")
 		rest--
-		logs := m.logLines(width-2, rest)
-		lines = append(lines, logs...)
+		lines = append(lines, m.logLines(width-2, rest)...)
 	}
 	for len(lines) < height {
 		lines = append(lines, "")
@@ -112,161 +107,7 @@ func (m *Model) sidePanel(width, height int) string {
 	return m.dim().Render("│ ") + strings.ReplaceAll(box, "\n", "\n"+m.dim().Render("│ "))
 }
 
-func (m *Model) richHeader(width int) string {
-	title := "爆炸猫"
-	if m.snap.Code != "" {
-		title += "  房间 " + m.snap.Code
-	}
-	right := m.phaseTitle()
-	pad := width - lipgloss.Width(title) - lipgloss.Width(right)
-	if pad < 1 {
-		return m.dim().Render(ui.CutWidth(title, width))
-	}
-	return m.turn().Render(title) + strings.Repeat(" ", pad) + m.dim().Render(right)
-}
-
-// phaseTitle 是右上角那句"现在是什么阶段"。
-func (m *Model) phaseTitle() string {
-	if !m.inGame() {
-		return "大厅"
-	}
-	o := m.obs()
-	switch o.Phase {
-	case engine.Responding:
-		return "响应中"
-	case engine.Giving:
-		return "交牌中"
-	case engine.Reinserting:
-		return "拆弹中"
-	}
-	if o.Turn == o.Seat {
-		return "轮到你"
-	}
-	return "等对手"
-}
-
-// pileLine 是"场上"那一行：弃牌堆顶、牌堆剩余、回合数。
-func (m *Model) pileLine(width int) string {
-	o := m.obs()
-	var b strings.Builder
-	b.WriteString(m.dim().Render("弃牌 "))
-	if len(o.Discard) > 0 {
-		b.WriteString(m.token(o.Discard[len(o.Discard)-1].Kind))
-	} else {
-		b.WriteString(m.dim().Render("（空）"))
-	}
-	b.WriteString(m.dim().Render(fmt.Sprintf("   牌堆 %d   本回合剩 %d", o.DeckCount, o.TurnsRemaining)))
-	if o.UnderAttack {
-		b.WriteString(m.warn().Render("   被攻击"))
-	}
-	if len(o.Future) > 0 {
-		var parts []string
-		for _, c := range o.Future {
-			parts = append(parts, m.token(c.Kind))
-		}
-		b.WriteString(m.dim().Render("   牌顶: ") + strings.Join(parts, " "))
-	}
-	return ui.CutWidth(b.String(), width)
-}
-
-func (m *Model) handHeader(width int) string {
-	// 正在选目标/选牌种时，这一块不是手牌，标题也要跟着换
-	switch m.step {
-	case stepTarget:
-		return m.turn().Render("▶ 选一个目标 —— 按数字，Enter 确认")
-	case stepRequest:
-		return m.turn().Render("▶ 三张组合：选要索要的牌种")
-	}
-
-	page, pages := m.pageCards()
-	text := fmt.Sprintf("你的手牌 %d 张", len(m.obs().Hand))
-	if pages > 1 {
-		text += fmt.Sprintf("  → %d/%d 页", m.page+1, pages)
-	}
-	_ = page
-	if m.myTurn() {
-		return m.turn().Render("▶ " + text + " —— 轮到你")
-	}
-	return m.dim().Render(text)
-}
-
-// handLines 每行若干张，牌面对齐：`1:[橙|橘]`。
-func (m *Model) handLines(width int) []string {
-	if opts := m.optionTokens(width); opts != "" {
-		return []string{opts}
-	}
-	page, _ := m.pageCards()
-	if len(page) == 0 {
-		return []string{m.dim().Render("（没有手牌）")}
-	}
-	cell := 10
-	perRow := width / cell
-	if perRow < 1 {
-		perRow = 1
-	}
-	var rows []string
-	for i := 0; i < len(page); i += perRow {
-		end := i + perRow
-		if end > len(page) {
-			end = len(page)
-		}
-		var parts []string
-		for j := i; j < end; j++ {
-			tok := m.dim().Render(fmt.Sprintf("%2d:", j+1)) + m.token(page[j].Kind)
-			if m.isPicked(page[j].ID) {
-				tok = m.turn().Render("▸") + tok
-			}
-			parts = append(parts, tok)
-		}
-		rows = append(rows, strings.Join(parts, " "))
-	}
-	return rows
-}
-
-// optionTokens 在"选目标 / 选牌种"时列出所有可选项，
-// 这样玩家不用猜数字对应谁——和 UNO 选颜色时把手牌换成色块是一个思路。
-func (m *Model) optionTokens(width int) string {
-	o := m.obs()
-	switch m.step {
-	case stepTarget:
-		var parts []string
-		for seat := range o.Alive {
-			if seat == o.Seat || !o.Alive[seat] || o.HandCounts[seat] == 0 {
-				continue
-			}
-			label := fmt.Sprintf("%d.%s(%d)", seat+1, m.seatName(seat), o.HandCounts[seat])
-			if seat == m.target {
-				label = m.turn().Render("▸" + label + "◂")
-			}
-			parts = append(parts, label)
-		}
-		head := m.dim().Render("[HAND] 选目标 ")
-		line := head + strings.Join(parts, " ")
-		if lipgloss.Width(line) > width {
-			line = ui.CutWidth(line, width)
-		}
-		return line
-	case stepRequest:
-		page, pages := m.requestPage()
-		var parts []string
-		for i, kind := range page {
-			parts = append(parts, fmt.Sprintf("%d.%s", i+1, m.token(kind)))
-		}
-		if pages > 1 {
-			parts = append(parts, fmt.Sprintf("(%d/%d 页，-= 翻页)", m.page+1, pages))
-		}
-		head := m.dim().Render("[HAND] 要哪张 ")
-		line := head + strings.Join(parts, " ")
-		for lipgloss.Width(line) > width && len(parts) > 1 {
-			parts = parts[:len(parts)-1]
-			line = head + strings.Join(parts, " ")
-		}
-		return line
-	}
-	return ""
-}
-
-// statusLine 是"[MSG] 现在该干什么"。每个阶段只说一件事。
+// statusLine 是 [MSG] 行：当前该干什么，或者刚刚发生了什么。
 func (m *Model) statusLine(width int) string {
 	if m.errVisible() {
 		return m.warn().Render("[MSG] " + ui.CutWidth(m.errMsg, max(10, width-6)))
@@ -274,7 +115,7 @@ func (m *Model) statusLine(width int) string {
 	return m.dim().Render("[MSG] ") + ui.CutWidth(m.hint(), max(10, width-6))
 }
 
-// hint 按"阶段 + 选择进度"给出一句话，避免同一屏出现两种解释。
+// hint 按"阶段 + 选择进度"只说一件事。
 func (m *Model) hint() string {
 	if !m.inGame() {
 		return "按 S 开局（房主）· B 加电脑 · V 投票重开"
@@ -283,96 +124,136 @@ func (m *Model) hint() string {
 	if !m.alive() {
 		return "你已淘汰，可以观战或按 Esc 离开"
 	}
+
+	// 预言结果展示优先：这是限时信息
+	if left := m.revealLeft(); left >= 0 {
+		if len(m.revealed) > 0 {
+			var parts []string
+			for i, c := range m.revealed {
+				label := m.token(c.Kind)
+				if c.Kind == engine.ExplodingKitten {
+					label = m.warn().Render("【炸弹】")
+				}
+				parts = append(parts, fmt.Sprintf("%d.%s", i+1, label))
+			}
+			return fmt.Sprintf("预言结果: %s (%ds后结束)", strings.Join(parts, " -> "), left)
+		}
+		return fmt.Sprintf("%s 正在偷看牌堆顶...(%ds)", m.seatName(m.revealBy), left)
+	}
+
 	switch o.Phase {
 	case engine.Responding:
-		left := m.remaining()
 		if o.Pending != nil && o.Seat < len(o.Pending.Passed) && o.Pending.Passed[o.Seat] {
-			return fmt.Sprintf("已放弃响应，等其他人… (%d 秒)", left)
+			return fmt.Sprintf("已放弃响应，等其他人… (%s)", fmtSeconds(m.deadline))
 		}
 		if o.Pending != nil {
-			return fmt.Sprintf("有人打出 %s —— 要反制吗？(%d 秒)", m.name(o.Pending.Kind), left)
+			actor := m.seatName(o.Pending.Action.Seat)
+			if o.Pending.Action.Seat == o.Seat {
+				actor = "你"
+			}
+			return fmt.Sprintf("%s 打出了 %s！生效倒计时: %s (可按 [N] 否决)",
+				actor, m.token(o.Pending.Kind), fmtSeconds(m.deadline))
 		}
 		return "等待响应…"
 	case engine.Giving:
 		if o.Pending != nil && o.Pending.Action.Target == o.Seat {
-			return "对方索要一张牌：按数字选一张交出去"
+			return fmt.Sprintf("%s 向你索要一张牌：按数字选一张交出去",
+				m.seatName(o.Pending.Action.Seat))
 		}
-		return "等对方交牌…"
+		if o.Pending != nil {
+			return fmt.Sprintf("等 %s 交牌…", m.seatName(o.Pending.Action.Target))
+		}
+		return "等待交牌…"
 	case engine.Reinserting:
-		if m.step == stepDefusePos {
-			return fmt.Sprintf("放回牌堆第 %d 张（0 = 牌顶），-= 调整，Enter 确认", m.pos)
+		if m.step == stepDefuseCustom {
+			return fmt.Sprintf("埋雷位置: 第 %d 张（0 = 牌堆顶），-= 调整，Enter 确认", m.pos)
 		}
-		return "你摸到爆炸猫！按数字选一张拆弹牌"
+		return "💥 摸到【爆炸猫】！已自动消耗 1 张[保命|拆弹]保命！请秘密将炸弹塞回牌堆："
 	}
 
-	switch m.step {
-	case stepCombo:
-		return fmt.Sprintf("已选 %d 张%s：再按一张同色凑三张，或 Enter 出这些",
-			len(m.picked), m.name(m.picked[0].Kind))
-	case stepTarget:
-		return "按数字选目标玩家，Enter 确认（Esc 取消）"
-	case stepRequest:
-		return "三张组合：按数字选要索要的牌种"
+	if m.step == stepTarget {
+		return "请选择你要盲抽的目标玩家："
 	}
-
 	if !m.myTurn() {
 		return fmt.Sprintf("等 %s 出牌…", m.seatName(o.Turn))
 	}
-	return "轮到你：按数字出牌，或按 D 摸一张"
+	return "轮到你：按数字出功能牌，或按 D 摸牌"
 }
 
-// cmdLine 只列"这个阶段真的能按"的键。
+// cmdLine 是 [CMD]：分阶段的按键表 / 选择器。
+//
+// 超宽时从尾部整项丢，宁可少写几个键，也不要出现 `[-=` 这种半截提示。
 func (m *Model) cmdLine(width int) string {
-	tokens := m.cmdTokens()
-	body := "[CMD] " + strings.Join(tokens, " ")
-	for lipgloss.Width(body) > width && len(tokens) > 1 {
+	tokens, prefix := m.cmdTokens()
+	body := prefix + strings.Join(tokens, " ")
+	for lipglossWidth(body) > width && len(tokens) > 1 {
 		tokens = tokens[:len(tokens)-1]
-		body = "[CMD] " + strings.Join(tokens, " ")
+		body = prefix + strings.Join(tokens, " ")
 	}
-	return m.dim().Render(body)
+	return m.dim().Render(ui.CutWidth(body, width))
 }
 
-func (m *Model) cmdTokens() []string {
+// cmdTokens 返回 [CMD] 行里的按键项和前缀。
+func (m *Model) cmdTokens() ([]string, string) {
+	o := m.obs()
+
+	// 选目标：整行变成选择器
+	if m.step == stepTarget {
+		var parts []string
+		for seat := range o.Alive {
+			if seat == o.Seat || !o.Alive[seat] || o.HandCounts[seat] == 0 {
+				continue
+			}
+			label := fmt.Sprintf("[%d]%s(%d)", seat+1, m.seatName(seat), o.HandCounts[seat])
+			if seat == m.target {
+				label = m.turn().Render("▸" + label + "◂")
+			}
+			parts = append(parts, label)
+		}
+		parts = append(parts, "[Esc]取消")
+		return parts, ">> 选择目标: "
+	}
+
+	// 埋雷：整行变成位置选择器
+	if o.Phase == engine.Reinserting && m.alive() {
+		if m.step == stepDefuseCustom {
+			return []string{fmt.Sprintf("[%d]", m.pos), "[-=]调整", "[Enter]确认", "[Esc]返回"},
+				">> 埋雷位置: "
+		}
+		return []string{
+			"[0]牌堆顶", "[1]第2张", "[2]第3张",
+			"[B]牌堆底", "[R]随机", fmt.Sprintf("[I]指定(0-%d)", o.DeckCount),
+		}, ">> 埋雷位置: "
+	}
+
 	tokens := []string{"[?]帮助"}
 	if !m.inGame() {
 		if m.snap.IsHost {
 			tokens = append(tokens, "[S]开始", "[B]电脑")
 		}
 		tokens = append(tokens, "[V]投票", "[I]界面")
-		return tokens
+		return tokens, "[CMD] "
 	}
-	o := m.obs()
 	if !m.alive() {
-		return append(tokens, "[Tab]玩家")
+		return []string{"[?]帮助", "[Tab]玩家", "[Esc]离开"}, "[CMD] "
 	}
+
 	switch o.Phase {
 	case engine.Responding:
-		tokens = append(tokens, "[1-5]反制", "[P]放弃", "[Tab]玩家")
+		return []string{
+			"[?]帮助", fmt.Sprintf("[N]否决(%d)", m.nopeCount()),
+			"[P]放弃", "[T]聊天", "[Tab]玩家",
+		}, "[CMD] "
 	case engine.Giving:
-		tokens = append(tokens, "[1-5]交牌")
-	case engine.Reinserting:
-		if m.step == stepDefusePos {
-			tokens = append(tokens, "[-=]位置", "[Enter]确认")
-		} else {
-			tokens = append(tokens, "[1-5]选拆弹")
-		}
-	default:
-		switch m.step {
-		case stepCombo:
-			tokens = append(tokens, "[1-5]加一张", "[Enter]出这些", "[Esc]取消")
-		case stepTarget:
-			tokens = append(tokens, "[1-5]选目标", "[Enter]确认", "[Esc]取消")
-		case stepRequest:
-			tokens = append(tokens, "[1-9]选牌种", "[Esc]取消")
-		default:
-			if m.myTurn() {
-				tokens = append(tokens, "[1-5]出牌", "[D]摸牌", "[-=]翻页", "[Tab]玩家")
-			} else {
-				tokens = append(tokens, "[Tab]玩家", "[-=]翻页")
-			}
-		}
+		return []string{"[?]帮助", "[1-5]交牌", "[-=]翻页", "[Tab]玩家"}, "[CMD] "
 	}
-	return append(tokens, "[I]界面")
+
+	_, pairs := m.pairKind()
+	return []string{
+		"[?]帮助", "[1-5]出牌", fmt.Sprintf("[G]对子盲抽(%d)", pairs),
+		"[D]摸牌", fmt.Sprintf("[N]否决(%d)", m.nopeCount()),
+		"[T]聊天", "[Tab]玩家", "[-=]翻页",
+	}, "[CMD] "
 }
 
 // playerLines 列出每个座位：名字、手牌数、是否淘汰。
@@ -399,7 +280,7 @@ func (m *Model) playerLines(width int) []string {
 			status = " 离线"
 		}
 		line := marker + name + status
-		if p.Seat == o.Turn && m.inGame() {
+		if m.inGame() && p.Seat == o.Turn {
 			line = m.turn().Render(ui.CutWidth("*"+line+"*", width))
 		} else if p.Seat == m.snap.MySeat {
 			line = m.ok().Render(line)
