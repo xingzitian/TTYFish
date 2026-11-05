@@ -7,6 +7,8 @@ package tui
 import (
 	"fmt"
 	"math/rand"
+	"slices"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -35,6 +37,7 @@ const (
 	stepTarget            // 选一个目标玩家（对子盲抽 / 索要）
 	stepDefusePos         // 埋雷：选放回位置（预设键）
 	stepDefuseCustom      // 埋雷：手动指定位置（-= 调，Enter 确认）
+	stepChat
 )
 
 const (
@@ -67,15 +70,21 @@ type Model struct {
 	pairK    engine.Kind // 要打出的那一对猫牌种类
 	pos      int         // 埋雷位置
 
-	deadline  time.Time // 响应窗口截止
-	playersAt time.Time // Tab 玩家列表
-	revealAt  time.Time // 预言结果展示截止
-	revealed  []engine.Card
-	revealBy  int // 谁打出的预言，用来给其他人显示"正在偷看"
+	deadline     time.Time // 响应窗口截止
+	playersAt    time.Time // Tab 玩家列表
+	revealAt     time.Time // 预言结果展示截止
+	revealed     []engine.Card
+	revealBy     int // 谁打出的预言，用来给其他人显示"正在偷看"
+	tickPending  bool
+	responseSent string
+	passSent     string
+	turnOffset   int
+	slideSeats   int
+	targetPage   int
 }
 
 type closedMsg struct{}
-type tickMsg struct{}
+type tickMsg struct{ model *Model }
 
 func NewModel(c client.Client, opts Options, r *lipgloss.Renderer) *Model {
 	if r == nil {
@@ -95,6 +104,14 @@ func NewModel(c client.Client, opts Options, r *lipgloss.Renderer) *Model {
 	if c != nil {
 		m.snap, m.sub = c.Snapshot(), c.Updates()
 		m.anchorTimers()
+		if o := m.obs(); m.inGame() && o.Phase == engine.Playing && len(o.Future) > 0 {
+			m.revealed = slices.Clone(o.Future)
+			m.revealBy = o.Seat
+			m.revealAt = time.Now().Add(revealTTL)
+		} else if m.inGame() && o.Phase == engine.Playing && o.PeekSeq > 0 && o.PeekSeat >= 0 {
+			m.revealBy = o.PeekSeat
+			m.revealAt = time.Now().Add(revealTTL)
+		}
 	}
 	return m
 }
@@ -114,29 +131,54 @@ func wait(ch <-chan client.Snapshot) tea.Cmd {
 
 func (m *Model) Init() tea.Cmd { return tea.Batch(wait(m.sub), m.tick()) }
 
-// tick 只在有倒计时的时候继续排下一帧，空闲时完全不重绘。
+// A single timer owns redraws; snapshots must not start parallel tick chains.
 func (m *Model) tick() tea.Cmd {
-	if m.deadline.IsZero() && m.revealAt.IsZero() {
+	if m.tickPending || m.boss || m.help || m.closed || m.snap.Kicked {
 		return nil
 	}
-	return tea.Tick(tickInterval, func(time.Time) tea.Msg { return tickMsg{} })
+	interval := tickInterval
+	if m.turnOffset != 0 || m.slideSeats != 0 {
+		interval = 16 * time.Millisecond
+	} else if m.deadline.IsZero() && m.revealAt.IsZero() &&
+		m.playersAt.IsZero() && !m.errVisible() {
+		return nil
+	}
+	m.tickPending = true
+	return tea.Tick(interval, func(time.Time) tea.Msg { return tickMsg{model: m} })
 }
 
 func (m *Model) Close() {}
 
 // HasModal 告诉网关：现在有选择占着键盘，Esc 先归游戏处理。
-func (m *Model) HasModal() bool { return m.boss || m.help || m.step != stepIdle }
+func (m *Model) HasModal() bool { return m.boss || m.help || m.showPlayers() || m.step != stepIdle }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	return model, tea.Batch(cmd, m.tick())
+}
+
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case client.SnapshotMsg:
 		m.applySnapshot(client.Snapshot(v))
-		return m, tea.Batch(wait(m.sub), m.tick())
+		return m, wait(m.sub)
 	case closedMsg:
 		m.closed = true
 		return m, nil
 	case tickMsg:
-		return m, m.tick()
+		if v.model != m || !m.tickPending {
+			return m, nil
+		}
+		m.tickPending = false
+		m.expireTransient()
+		if m.boss || m.help || m.closed || m.snap.Kicked {
+			m.turnOffset, m.slideSeats = 0, 0
+		} else if m.turnOffset > 0 {
+			m.turnOffset--
+		} else if m.turnOffset < 0 {
+			m.turnOffset++
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = max(1, v.Width), max(1, v.Height)
 		return m, nil
@@ -149,25 +191,62 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // applySnapshot 收敛界面状态：阶段变了就丢掉未完成的选择；
 // 预言结果第一次出现时开始 10 秒展示。
 func (m *Model) applySnapshot(next client.Snapshot) {
+	previous := m.snap
 	prev := m.obs()
 	m.snap = next
 	o := m.obs()
-	if o.Phase != prev.Phase || next.Phase != client.Playing {
+	if o.Phase != prev.Phase || o.Turn != prev.Turn || next.Code != previous.Code ||
+		next.Phase != client.Playing {
 		m.reset()
 	}
-	if len(o.Future) > 0 && len(prev.Future) == 0 {
+	if responseKey(o) != responseKey(prev) || next.Code != previous.Code {
+		m.responseSent = ""
+		m.passSent = ""
+	}
+	m.updateTurnOffset(previous)
+	// A peek is presentation, not an extra turn. Any subsequent action that
+	// changes the deck/actor/phase invalidates it, including a cancelled peek.
+	if o.Turn != prev.Turn || o.DeckCount != prev.DeckCount ||
+		o.Phase != engine.Playing || next.Phase != client.Playing ||
+		next.Code != previous.Code || !slices.Equal(o.Future, prev.Future) ||
+		o.PeekSeq != prev.PeekSeq || o.PeekSeat != prev.PeekSeat {
+		m.clearReveal()
+	}
+	peekResolved := o.PeekSeq > prev.PeekSeq && o.PeekSeat >= 0 &&
+		o.PeekSeat == o.Turn && o.Phase == engine.Playing && next.Phase == client.Playing
+	if next.Phase == client.Playing && o.Phase == engine.Playing &&
+		len(o.Future) > 0 && (!slices.Equal(o.Future, prev.Future) ||
+		(peekResolved && o.PeekSeat == o.Seat)) {
 		m.revealed = append([]engine.Card(nil), o.Future...)
 		m.revealBy = m.snap.MySeat
 		m.revealAt = time.Now().Add(revealTTL)
 	}
 	// 别人打的预言：我看不到内容，但要知道有人在看牌堆
-	if prev.Phase == engine.Responding && prev.Pending != nil &&
-		prev.Pending.Kind == engine.SeeTheFuture &&
-		prev.Pending.Action.Seat != m.snap.MySeat && m.revealAt.IsZero() {
-		m.revealBy = prev.Pending.Action.Seat
+	if peekResolved &&
+		o.PeekSeat != m.snap.MySeat && m.revealAt.IsZero() {
+		m.revealBy = o.PeekSeat
 		m.revealAt = time.Now().Add(revealTTL)
 	}
 	m.anchorTimers()
+}
+
+func (m *Model) clearReveal() {
+	m.revealAt = time.Time{}
+	m.revealed = nil
+	m.revealBy = -1
+}
+
+func (m *Model) expireTransient() {
+	now := time.Now()
+	if !m.revealAt.IsZero() && !now.Before(m.revealAt) {
+		m.clearReveal()
+	}
+	if !m.deadline.IsZero() && !now.Before(m.deadline) {
+		m.deadline = time.Time{}
+	}
+	if !m.playersAt.IsZero() && !now.Before(m.playersAt) {
+		m.playersAt = time.Time{}
+	}
 }
 
 func (m *Model) anchorTimers() {
@@ -184,6 +263,7 @@ func (m *Model) reset() {
 	m.pairDraw = false
 	m.pairK = ""
 	m.pos = 0
+	m.targetPage = 0
 }
 
 func (m *Model) obs() engine.Observation {
@@ -213,16 +293,17 @@ func (m *Model) fail(msg string) {
 func (m *Model) errVisible() bool { return m.errMsg != "" && time.Since(m.errAt) < errTTL }
 func (m *Model) say()             { m.errMsg = "" }
 
-func (m *Model) act(a engine.Action) {
+func (m *Model) act(a engine.Action) bool {
 	if m.c == nil || m.closed || m.snap.Kicked {
 		m.fail("连接不可用")
-		return
+		return false
 	}
 	if err := m.c.Act(a); err != nil {
 		m.fail(err.Error())
-		return
+		return false
 	}
 	m.say()
+	return true
 }
 
 // pageCards 返回当前页的手牌（已排序）和总页数。
@@ -260,7 +341,7 @@ func (m *Model) nopeCount() int {
 }
 
 func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
-	key := k.String()
+	key := strings.ToLower(k.String())
 
 	if key == "ctrl+b" {
 		m.boss = !m.boss
@@ -281,7 +362,33 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
-
+	if m.showPlayers() && key == "esc" {
+		m.playersAt = time.Time{}
+		return nil
+	}
+	if key == "i" && m.inGame() && m.alive() &&
+		m.obs().Phase == engine.Reinserting && m.obs().Turn == m.snap.MySeat {
+		m.step = stepDefuseCustom
+		m.pos = 0
+		m.say()
+		return nil
+	}
+	if m.step == stepDefuseCustom {
+		switch key {
+		case "-", "pageup", "pgup":
+			m.advancePage(-1)
+			return nil
+		case "=", "pagedown", "pgdown":
+			m.advancePage(1)
+			return nil
+		case "enter", " ":
+			m.useDefuse(m.obs(), m.pos)
+			return nil
+		case "esc":
+			m.step = stepDefusePos
+			return nil
+		}
+	}
 	switch key {
 	case "?", "/":
 		m.help = true
@@ -296,12 +403,16 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	case "tab":
-		m.playersAt = time.Now().Add(playerPanelTTL)
+		if m.showPlayers() {
+			m.playersAt = time.Time{}
+		} else {
+			m.playersAt = time.Now().Add(playerPanelTTL)
+		}
 		return nil
-	case "pagedown", "=":
+	case "pagedown", "pgdown", "=":
 		m.advancePage(1)
 		return nil
-	case "pageup", "-":
+	case "pageup", "pgup", "-":
 		m.advancePage(-1)
 		return nil
 	case "esc":
@@ -315,6 +426,22 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		return tea.Quit
 	}
 
+	o := m.obs()
+	if m.step == stepChat {
+		if idx, ok := digit(key); ok && idx < len(client.Presets) && m.c != nil {
+			if err := m.c.Chat(idx); err != nil {
+				m.fail(err.Error())
+			} else {
+				m.say()
+				m.reset()
+			}
+		}
+		return nil
+	}
+	if key == "t" && (!m.inGame() || m.alive()) {
+		m.step = stepChat
+		return nil
+	}
 	if !m.inGame() {
 		m.lobbyKey(key)
 		return nil
@@ -322,8 +449,10 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	if !m.alive() {
 		return nil
 	}
-
-	o := m.obs()
+	if key == "p" && o.Phase == engine.Playing && len(m.revealed) > 0 {
+		m.clearReveal()
+		return nil
+	}
 	switch o.Phase {
 	case engine.Responding:
 		return m.handleResponding(key)
@@ -350,7 +479,9 @@ func (m *Model) advancePage(delta int) {
 		return
 	}
 	if m.step == stepTarget {
-		return // 目标一页放得下
+		pages := max(1, (len(m.targets())+1)/2)
+		m.targetPage = clampInt(m.targetPage+delta, 0, pages-1)
+		return
 	}
 	_, pages := m.pageCards()
 	m.page = clampInt(m.page+delta, 0, pages-1)
@@ -367,14 +498,6 @@ func (m *Model) handlePlaying(key string) tea.Cmd {
 		m.act(engine.Action{Type: engine.Draw, Seat: o.Seat, Target: -1})
 	case "g":
 		m.startPair()
-	case "t":
-		if m.c != nil {
-			if err := m.c.Chat(0); err != nil {
-				m.fail(err.Error())
-			} else {
-				m.say()
-			}
-		}
 	}
 	return nil
 }
@@ -401,6 +524,7 @@ func (m *Model) pickCard(idx int) {
 		m.target = -1
 		m.pairDraw = false
 		m.pairK = c.Kind
+		m.targetPage = 0
 		m.say()
 	default:
 		m.act(engine.Action{Type: engine.Play, Seat: o.Seat, CardIDs: []int{c.ID}, Target: -1})
@@ -418,19 +542,22 @@ func (m *Model) startPair() {
 	m.target = -1
 	m.pairDraw = true
 	m.step = stepTarget
+	m.targetPage = 0
 	m.say()
 }
 
 func (m *Model) handleTarget(key string) tea.Cmd {
 	o := m.obs()
 	if idx, ok := digit(key); ok {
-		seat := idx
-		if seat >= len(o.Alive) || !o.Alive[seat] || seat == o.Seat || o.HandCounts[seat] == 0 {
+		targets := m.targets()
+		index := m.targetPage*2 + idx
+		if idx >= 2 || index >= len(targets) {
 			m.fail("选一个还有手牌的对手")
 			return nil
 		}
-		m.target = seat
+		m.target = targets[index]
 		m.say()
+		m.submitTarget(o)
 		return nil
 	}
 	switch key {
@@ -460,11 +587,15 @@ func (m *Model) submitTarget(o engine.Observation) {
 			m.reset()
 			return
 		}
-		m.act(engine.Action{Type: engine.Play, Seat: o.Seat, CardIDs: ids, Target: m.target})
+		if !m.act(engine.Action{Type: engine.Play, Seat: o.Seat, CardIDs: ids, Target: m.target}) {
+			return
+		}
 	} else {
 		for _, c := range o.Hand {
 			if c.Kind == engine.Favor {
-				m.act(engine.Action{Type: engine.Play, Seat: o.Seat, CardIDs: []int{c.ID}, Target: m.target})
+				if !m.act(engine.Action{Type: engine.Play, Seat: o.Seat, CardIDs: []int{c.ID}, Target: m.target}) {
+					return
+				}
 				break
 			}
 		}
@@ -475,21 +606,30 @@ func (m *Model) submitTarget(o engine.Observation) {
 // handleResponding：按 N 打出否决，按 P 放弃。
 func (m *Model) handleResponding(key string) tea.Cmd {
 	o := m.obs()
-	if o.Pending != nil && o.Seat < len(o.Pending.Passed) && o.Pending.Passed[o.Seat] {
-		m.fail("你已经放弃这次响应")
-		return nil
-	}
 	switch key {
 	case "n":
+		if m.nopeCount() == 0 {
+			m.fail("你手里没有否决牌")
+			return nil
+		}
+		if !m.canNope() {
+			return nil
+		}
 		for _, c := range o.Hand {
 			if c.Kind == engine.Nope {
-				m.act(engine.Action{Type: engine.PlayNope, Seat: o.Seat, CardIDs: []int{c.ID}, Target: -1})
+				if m.act(engine.Action{Type: engine.PlayNope, Seat: o.Seat, CardIDs: []int{c.ID}, Target: -1}) {
+					m.responseSent = responseKey(o)
+				}
 				return nil
 			}
 		}
 		m.fail("你手里没有否决牌")
 	case "p":
-		m.act(engine.Action{Type: engine.Pass, Seat: o.Seat, Target: -1})
+		if !m.passed() && m.passSent != responseKey(o) {
+			if m.act(engine.Action{Type: engine.Pass, Seat: o.Seat, Target: -1}) {
+				m.passSent = responseKey(o)
+			}
+		}
 	}
 	return nil
 }
@@ -538,8 +678,7 @@ func (m *Model) handleReinserting(key string) tea.Cmd {
 		m.useDefuse(o, o.DeckCount)
 	case "r":
 		m.useDefuse(o, rand.Intn(o.DeckCount+1))
-	case "I":
-		// 大写 I：指定埋雷位置（小写 i 是切换界面，不能抢）
+	case "i":
 		m.step = stepDefuseCustom
 		m.pos = 0
 		m.say()
@@ -633,8 +772,6 @@ func (m *Model) revealLeft() int {
 	}
 	left := secondsLeft(m.revealAt)
 	if left <= 0 {
-		m.revealAt = time.Time{}
-		m.revealed = nil
 		return -1
 	}
 	return left
