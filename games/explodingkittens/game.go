@@ -103,8 +103,9 @@ func (Game) MatchWinner(state any) int { return state.(*engine.State).Winner }
 func (Game) Scores(state any) []int {
 	s := state.(*engine.State)
 	scores := make([]int, len(s.Alive))
-	if s.Winner >= 0 {
-		scores[s.Winner] = 1
+	if s.Phase == engine.Finished && s.Winner >= 0 {
+		// Scores are settled in tenths of a PT; eliminated seats remain in Alive.
+		scores[s.Winner] = (len(s.Alive) - 1) * 50
 	}
 	return scores
 }

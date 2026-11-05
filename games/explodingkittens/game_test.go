@@ -121,8 +121,14 @@ func TestBotsFinishAndEliminatedPlayersCannotAct(t *testing.T) {
 			if g.Phase(state) != game.MatchOver || g.MatchWinner(state) < 0 {
 				t.Fatalf("bots did not finish seats=%d seed=%d", seats, seed)
 			}
-			if g.Scores(state)[g.MatchWinner(state)] != 1 {
-				t.Fatal("winner missing")
+			for seat, score := range g.Scores(state) {
+				want := 0
+				if seat == g.MatchWinner(state) {
+					want = (seats - 1) * 50
+				}
+				if score != want {
+					t.Fatalf("seats=%d seat=%d score=%d want=%d", seats, seat, score, want)
+				}
 			}
 			for seat, alive := range s.Alive {
 				if !alive {

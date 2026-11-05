@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"math"
 	"path/filepath"
 	"sync"
@@ -90,11 +91,77 @@ func TestPTOverflowRollsBackResult(t *testing.T) {
 	if err := st.AwardUNO("overflow", a.ID, 1); err == nil {
 		t.Fatal("overflow accepted")
 	}
+	if err := st.AwardKittens("overflow", a.ID, 50); err == nil {
+		t.Fatal("kittens overflow accepted")
+	}
 	if got, err := st.PTTenths(a.ID); err != nil || got != math.MaxInt64 {
 		t.Fatalf("balance=%d err=%v", got, err)
 	}
 	var n int
 	if err := st.db.QueryRow(`SELECT COUNT(*) FROM uno_pt_rewards WHERE match_id='overflow'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("failed result was not rolled back: %d %v", n, err)
+	}
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM kittens_pt_rewards`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("failed kittens result was not rolled back: %d %v", n, err)
+	}
+}
+
+func TestKittensRewardsPersistAndShareBalance(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "points.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { st.Close() }()
+	a, err := st.EnsureAccount("fp", "pub", "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 12 {
+		wg.Go(func() {
+			if err := st.AwardKittens("match-2", a.ID, 50); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	for seats := 3; seats <= 5; seats++ {
+		if err := st.AwardKittens(fmt.Sprintf("match-%d", seats), a.ID, int64(seats-1)*50); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.AwardUNO("uno-match", a.ID, 68); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []struct {
+		match, account string
+		score          int64
+	}{
+		{"match-2", a.ID, 100}, {"match-2", "missing", 50},
+		{"", a.ID, 50}, {"unknown", "missing", 50},
+		{"negative", a.ID, -50}, {"zero", a.ID, 0},
+		{"fraction", a.ID, 51}, {"too-large", a.ID, 250},
+	} {
+		if err := st.AwardKittens(invalid.match, invalid.account, invalid.score); err == nil {
+			t.Fatalf("accepted invalid kittens reward %+v", invalid)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AwardKittens("match-2", a.ID, 50); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.PTTenths(a.ID); err != nil || got != 568 {
+		t.Fatalf("shared balance=%d want=568 err=%v", got, err)
+	}
+	var n int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM kittens_pt_rewards`).Scan(&n); err != nil || n != 4 {
+		t.Fatalf("kittens rewards=%d want=4 err=%v", n, err)
 	}
 }

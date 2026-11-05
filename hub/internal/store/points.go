@@ -18,8 +18,20 @@ func (s *Store) PTTenths(accountID string) (int64, error) {
 
 // AwardUNO atomically records one final result and adds score tenths of a PT.
 func (s *Store) AwardUNO(matchID, accountID string, score int64) error {
+	return s.awardPT("uno_pt_rewards", matchID, accountID, score)
+}
+
+func (s *Store) AwardKittens(matchID, accountID string, score int64) error {
+	if score < 50 || score > 200 || score%50 != 0 {
+		return errors.New("invalid Exploding Kittens PT reward")
+	}
+	return s.awardPT("kittens_pt_rewards", matchID, accountID, score)
+}
+
+// table is an internal constant, never a caller-supplied identifier.
+func (s *Store) awardPT(table, matchID, accountID string, score int64) error {
 	if matchID == "" || accountID == "" || score < 0 {
-		return errors.New("invalid UNO PT reward")
+		return errors.New("invalid PT reward")
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -28,18 +40,18 @@ func (s *Store) AwardUNO(matchID, accountID string, score int64) error {
 	defer tx.Rollback()
 	var previousAccount string
 	var previousScore int64
-	err = tx.QueryRow(`SELECT account_id,score FROM uno_pt_rewards WHERE match_id=?`, matchID).
+	err = tx.QueryRow(`SELECT account_id,score FROM `+table+` WHERE match_id=?`, matchID).
 		Scan(&previousAccount, &previousScore)
 	if err == nil {
 		if previousAccount != accountID || previousScore != score {
-			return fmt.Errorf("UNO PT result conflict for match %s", matchID)
+			return fmt.Errorf("PT result conflict for match %s", matchID)
 		}
 		return tx.Commit()
 	}
 	if err != sql.ErrNoRows {
 		return err
 	}
-	if _, err = tx.Exec(`INSERT INTO uno_pt_rewards(match_id,account_id,score,created_at) VALUES(?,?,?,?)`,
+	if _, err = tx.Exec(`INSERT INTO `+table+`(match_id,account_id,score,created_at) VALUES(?,?,?,?)`,
 		matchID, accountID, score, time.Now().UnixMilli()); err != nil {
 		return err
 	}

@@ -20,9 +20,25 @@ func (r *rewardRecorder) AwardUNO(id, account string, score int64) error {
 	return r.err
 }
 
+func (r *rewardRecorder) AwardKittens(id, account string, score int64) error {
+	return r.AwardUNO(id, account, score)
+}
+
 func TestUNORewardsIdentityAndErrors(t *testing.T) {
+	testRewardsIdentityAndErrors(t, false)
+}
+
+func TestKittensRewardsIdentityAndErrors(t *testing.T) {
+	testRewardsIdentityAndErrors(t, true)
+}
+
+func testRewardsIdentityAndErrors(t *testing.T, kittens bool) {
+	t.Helper()
 	repo := &rewardRecorder{}
 	settle := UNORewards(repo)
+	if kittens {
+		settle = KittensRewards(repo)
+	}
 	if err := settle(room.MatchResult{ID: "match", Score: 68}); err != nil || repo.calls != 0 {
 		t.Fatal("native bot awarded")
 	}
