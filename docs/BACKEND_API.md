@@ -183,7 +183,7 @@ Invoke-RestMethod "$apiBase/api/v1/auth/logout" -Method Post -Headers $headers
 }
 ```
 
-后续请求使用 `Authorization: Bearer <access_token>`。API 不读取登录 Cookie，不把令牌放进 URL。新会话有效期为 24 小时，无刷新令牌；过期后重新登录。退出只撤销当前令牌。修改密码默认保留会话，可通过 revoke_other_sessions 选择退出其他登录；删除公钥会同时撤销由该公钥登录的已关联会话。
+后续请求使用 `Authorization: Bearer <access_token>`，不把令牌放进 URL。以上示例未提供设备 ID，返回兼容旧客户端的 24 小时令牌。Web 登录提供 `X-Device-ID` 后，访问令牌有效期为 900 秒，另设置 HttpOnly 刷新 Cookie；通过 `POST /api/v1/auth/refresh` 轮换并获取新令牌。Cookie 有效的 Web 会话有 30 天绝对期限。修改密码默认保留会话，可通过 revoke_other_sessions 选择退出其他登录；删除公钥会同时撤销由该公钥登录的已关联会话。详细部署与迁移说明见 [认证与会话升级](SESSION_UPGRADE.md)。
 
 ## 登录会话管理
 
@@ -210,7 +210,7 @@ Invoke-RestMethod "$apiBase/api/v1/auth/logout" -Method Post -Headers $headers
 - `credential_fingerprint` 为实际认证使用的公钥指纹。密码会话和无法追溯的历史会话返回 null。
 - `last_seen_at` 是后端最近成功验证此会话的时间，包含普通请求和 SSE 心跳，不代表用户最后按键时间。
 - `source_ip` 和 `user_agent` 在会话创建时记录，后续请求不覆盖。来源默认采用直连 IP；只有配置的可信代理转发链、或已认证 SSH 网关提供的玩家 IP 才会替代它。旧记录不回填。User-Agent 是客户端声明，不是可信的设备识别。未知值为空字符串。
-- Web 每个浏览器配置使用本地随机设备 ID。密码登录和 SSH 挑战领取会话时发送 `X-Device-ID`；列表把同一账号、同一浏览器配置的多个有效登录令牌合并为一行，以最近登录信息展示。多个标签页的令牌仍分别有效；撤销该行会退出此浏览器的所有登录。“退出其他所有登录”也按设备组保留当前浏览器，并以其他设备/未分组会话组数返回。不同浏览器配置、不同账号彼此独立；没有提供该头的旧客户端/SSH 网关仍按每次登录单独记录。
+- Web 每个浏览器配置使用本地随机设备 ID。密码登录和 SSH 挑战领取会话时发送 `X-Device-ID`；同账号同设备重新登录会撤销旧设备会话，刷新产生的多个短期令牌属于同一设备会话。撤销该行会使该会话的刷新凭证和访问令牌失效。SSH 在线连接通过 `/api/v1/me/terminal` 单独查询。
 - 设备 ID 是浏览器生成且可伪造的分组标识，不是认证凭证或可信设备证明。升级前建立且没有设备 ID 的历史会话无法可靠追溯归并，会保留到过期或手动撤销。`current` 表示此设备组中至少有一个令牌正用于当前请求。
 
 使用 `DELETE /api/v1/me/sessions/{id}` 撤销指定会话，成功返回 204。只允许撤销自己的会话，其他账号的 ID、不存在、已过期或已撤销的 ID 都返回 404；ID 格式不正确返回 400。允许撤销当前会话，成功响应后客户端应清除本地令牌，后续请求将返回 401。
@@ -246,7 +246,7 @@ $sessions.items
 Invoke-RestMethod "$apiBase/api/v1/me/sessions/revoke-others" -Method Post -Headers $headers
 ```
 
-此阶段只提供后端 API，Web 仍需添加会话列表、退出指定登录，以及修改密码时的退出选项。刷新令牌尚未实现；认证限流策略见下文。
+Web 已接入会话列表、撤销其他登录和刷新令牌；认证限流策略见下文。
 
 ## SSH 网关联调约定
 

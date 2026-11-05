@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/xingzitian/TTYFish/hub/internal/account"
 	"github.com/xingzitian/TTYFish/hub/internal/play"
@@ -27,14 +28,18 @@ type Config struct {
 	// GatewayToken authenticates trusted SSH gateways, never browser clients.
 	GatewayToken   string
 	AllowedOrigins []string
+	// InsecureWebCookies is for local HTTP development only.
+	InsecureWebCookies bool
 }
 type Server struct {
-	accounts *account.Service
-	cfg      Config
-	mux      *http.ServeMux
-	limiter  *ratelimit.Limiter
-	rates    RateLimits
-	sources  sourceResolver
+	accounts         *account.Service
+	cfg              Config
+	mux              *http.ServeMux
+	limiter          *ratelimit.Limiter
+	rates            RateLimits
+	sources          sourceResolver
+	terminalMu       sync.Mutex
+	terminalWatchers map[string]map[chan struct{}]struct{}
 }
 
 func New(accounts *account.Service, cfg Config) (*Server, error) {
@@ -54,7 +59,7 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{accounts: accounts, cfg: cfg, mux: http.NewServeMux(), rates: rates, sources: sources, limiter: ratelimit.New(20000)}
+	s := &Server{accounts: accounts, cfg: cfg, mux: http.NewServeMux(), rates: rates, sources: sources, limiter: ratelimit.New(20000), terminalWatchers: make(map[string]map[chan struct{}]struct{})}
 	s.mux.HandleFunc("GET /api/openapi.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_, _ = w.Write(openAPISpec)
@@ -72,6 +77,12 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 	s.mux.HandleFunc("GET /api/v1/me", s.me)
 	s.mux.HandleFunc("GET /api/v1/me/points", s.points)
 	s.mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
+	s.mux.HandleFunc("POST /api/v1/auth/refresh", s.refreshWeb)
+	s.mux.HandleFunc("POST /api/v1/internal/terminal/claim", s.claimTerminal)
+	s.mux.HandleFunc("POST /api/v1/internal/terminal/heartbeat", s.heartbeatTerminal)
+	s.mux.HandleFunc("POST /api/v1/internal/terminal/release", s.releaseTerminal)
+	s.mux.HandleFunc("POST /api/v1/internal/terminal/events", s.terminalEvents)
+	s.mux.HandleFunc("GET /api/v1/me/terminal", s.onlineTerminal)
 	s.mux.HandleFunc("GET /api/v1/me/sessions", s.sessions)
 	s.mux.HandleFunc("DELETE /api/v1/me/sessions/{id}", s.revokeSession)
 	s.mux.HandleFunc("POST /api/v1/me/sessions/revoke-others", s.revokeOtherSessions)
@@ -225,6 +236,9 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !gateway && r.Header.Get("X-Device-ID") != "" && !s.checkWebOrigin(w, r) {
+		return
+	}
 	if !s.aggregate(w, r, gateway, "public-auth", s.rates.PublicAuthIP) {
 		return
 	}
@@ -239,6 +253,11 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		report(w, err)
 		return
+	}
+	if !gateway && r.Header.Get("X-Device-ID") != "" {
+		if !s.issueWebCookie(w, r, &session) {
+			return
+		}
 	}
 	respond(w, 200, session)
 }
@@ -297,6 +316,22 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(refreshCookieName(s.cfg.InsecureWebCookies)); err == nil {
+		if !s.checkWebOrigin(w, r) {
+			return
+		}
+		if err := s.accounts.LogoutWeb(bearer(r), c.Value); err != nil {
+			report(w, err)
+			return
+		}
+		if err := s.accounts.Logout(bearer(r)); err != nil {
+			report(w, err)
+			return
+		}
+		s.clearWebCookie(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if _, ok := s.current(w, r); !ok {
 		return
 	}

@@ -35,6 +35,7 @@ func run() error {
 	db := flag.String("db", "backend.db", "账号数据库文件")
 	origins := flag.String("cors-origins", "", "允许的浏览器来源，逗号分隔，例如 http://localhost:5173")
 	proxies := flag.String("trusted-proxies", "", "可信反向代理 CIDR，逗号分隔；为空时忽略 X-Forwarded-For")
+	insecureCookies := flag.Bool("insecure-web-cookies", false, "仅本地 HTTP 开发时允许非 Secure 登录 Cookie")
 	authIPLimit := flag.Int("rate-limit-auth-ip", 120, "普通来源每分钟密码登录与挑战创建请求预算")
 	gatewayLimit := flag.Int("rate-limit-gateway", 600, "已认证网关每分钟请求总预算")
 	flag.Parse()
@@ -51,7 +52,7 @@ func run() error {
 		return err
 	}
 	defer games.Close()
-	cfg := api.Config{GatewayToken: os.Getenv("TTYFISH_GATEWAY_TOKEN"), Games: games, RateLimits: api.RateLimits{PublicAuthIP: *authIPLimit, GatewayRequests: *gatewayLimit}}
+	cfg := api.Config{GatewayToken: os.Getenv("TTYFISH_GATEWAY_TOKEN"), Games: games, InsecureWebCookies: *insecureCookies, RateLimits: api.RateLimits{PublicAuthIP: *authIPLimit, GatewayRequests: *gatewayLimit}}
 	if *proxies != "" {
 		for _, proxy := range strings.Split(*proxies, ",") {
 			cfg.TrustedProxies = append(cfg.TrustedProxies, strings.TrimSpace(proxy))

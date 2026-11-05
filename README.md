@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/xingzitian/TTYFish/actions/workflows/ci.yml/badge.svg)](https://github.com/xingzitian/TTYFish/actions/workflows/ci.yml)
 
-用 SSH 终端玩多人小游戏的平台。网页负责注册和账号管理，核心后端负责账号、房间与游戏规则，SSH 网关负责终端交互。当前可玩的游戏是 UNO。
+用 SSH 终端玩多人小游戏的平台。网页负责注册和账号管理，核心后端负责账号、房间与游戏规则，SSH 网关负责终端交互。当前接入 UNO 和爆炸猫。
 
 玩家先在网页注册固定用户名，提供 SSH 公钥或设置密码，至少选择一种。之后所有登录都使用该用户名；同一账号的多把密钥和密码对应同一个游戏身份。
 
@@ -19,7 +19,7 @@
 | 核心后端 | `hub/cmd/backend` | 账号认证、公钥管理、房间、游戏动作、计时与状态推送 |
 | SSH 网关 | `hub/cmd/hub` | SSH 密钥/密码认证、游戏选择、按键输入、终端渲染；通过 API 操作后端 |
 | Web 前端 | `web/` | Vue 3 + TypeScript + Element Plus；注册、登录、账号设置 |
-| 游戏模块 | `games/uno/` | UNO 规则、机器人、JSON 动作协议与终端界面 |
+| 游戏模块 | `games/uno/`、`games/explodingkittens/` | 游戏规则、机器人、JSON 动作协议与终端界面 |
 | SDK | `sdk/` | 游戏规则接口、客户端快照、界面所需契约 |
 
 后端和 SSH 网关已经分为两个进程。`cmd/hub` 不直接访问账号数据库，也不在本地执行对局规则。Web 当前只做账号相关页面，游戏在 SSH 终端中进行。
@@ -31,10 +31,10 @@
 | 固定用户名注册 | 已完成；用户名 3–20 位，小写字母开头，允许数字、下划线和短横线 |
 | 密码与 SSH 密钥登录 | Web 和 SSH 均已接入账号 API；密码可选 |
 | 网页 SSH 挑战登录 | 已接通生成挑战、终端确认、浏览器领取会话；90 秒有效且只能领取一次 |
-| 多公钥管理 | API 支持添加、删除、命名、改名、查询最后使用时间；Web 已接增删，名称与时间展示待接入 |
-| 登录会话管理 | API 支持会话列表、撤销指定会话和退出其他登录；删除公钥撤销关联会话，改密码可选退出其他登录；Web 待接入 |
+| 多公钥管理 | 支持添加、删除、命名、改名和查看最后使用时间 |
+| 登录会话管理 | Web 刷新保持登录，设备可单独撤销；SSH 新交互连接接管旧连接，网页单独显示在线终端 |
 | 认证限流 | 已按来源、账号和已认证网关分层；支持可信代理 CIDR、玩家 IP 转发与实际 Retry-After 等待秒数 |
-| SSH 大厅 | 已有游戏选择入口，当前只注册 UNO |
+| SSH 大厅 | 已有游戏选择入口，注册 UNO 与爆炸猫 |
 | 房间与 UNO | 已有建房、进退房、房主开局、机器人、预设聊天、重开投票和游戏动作 API |
 | PT 积分 | 后端持久化余额与本人查询 API；UNO 最终赢家按游戏分数 10:1 获得 PT，68 分 = 6.8 PT，重复结算不重复入账；暂无积分 UI |
 | 实时状态与重连 | 网关通过 SSE 接收玩家快照，支持断线托管、恢复座位与新连接接管 |
@@ -43,8 +43,7 @@
 
 接下来主要补齐：
 
-- Web 的密钥名称、改名、最后使用时间展示，以及登录会话管理页面。
-- 多游戏实际接入，以及网关游戏列表与后端开放列表的同步。
+- 继续完善多游戏体验与新游戏接入。
 - 对局持久化、战绩与统计、好友和在线状态、观战。
 
 **当前房间保存在单个后端进程的内存中。** 后端重启会丢失对局，账号与凭证保留在 SQLite 中；尚不支持多个后端实例共同承载房间。
@@ -60,7 +59,7 @@
 ```powershell
 cd hub
 $env:TTYFISH_GATEWAY_TOKEN = 'ttyfish-local-development-token-32-bytes'
-go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins 'http://localhost:5173,http://127.0.0.1:5173'
+go run ./cmd/backend -addr 127.0.0.1:8081 -db backend.db -cors-origins 'http://localhost:5173,http://127.0.0.1:5173' -insecure-web-cookies
 ```
 
 默认数据库位于当前目录的 `backend.db`。可访问：
@@ -91,6 +90,8 @@ npm run dev -- --strictPort
 访问 `http://localhost:5173`，先注册，再登录。Vite 将 `/api` 代理到本地后端。
 
 **代理不会取消浏览器的 Origin 请求头。** 后端按来源白名单校验，所以即使使用 Vite 代理，也要保留上面的 `-cors-origins`。若更换前端地址或端口，同步修改该配置。
+
+`-insecure-web-cookies` 仅供本机 HTTP 调试。生产环境必须通过 HTTPS 提供网页和同源 `/api`，使用默认的 Secure、HttpOnly、SameSite=Strict 刷新 Cookie；当前文档中记录的纯 HTTP 生产地址不满足这一要求，升级部署前需配置 HTTPS 并更新来源白名单。
 
 ### 4. 进入游戏
 
@@ -187,7 +188,7 @@ bash hub/scripts/login-smoke.sh
 
 ```ini
 EnvironmentFile=/etc/ttyfish/gateway.env
-ExecStart=/opt/ttyfish/backend -addr 127.0.0.1:8082 -db /var/lib/ttyfish/backend.db -cors-origins http://159.75.78.7:12332
+ExecStart=/opt/ttyfish/backend -addr 127.0.0.1:8082 -db /var/lib/ttyfish/backend.db -cors-origins https://YOUR_WEB_HOST
 ```
 
 网关的关键配置：

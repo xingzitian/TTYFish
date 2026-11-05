@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "TTYFish 账号认证 API",
-    "version": "1.6.0",
+    "version": "1.7.0",
     "description": "核心后端的账号、房间和游戏 API。使用玩家 Bearer 会话和独立网关凭证。认证按来源、账号、认证网关及操作类型分层限流；默认窗口 60 秒。429 响应通过 Retry-After 返回实际剩余等待秒数。可信代理默认关闭。"
   },
   "servers": [
@@ -16,6 +16,42 @@
     }
   ],
   "paths": {
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "refreshWebSession",
+        "summary": "轮换浏览器刷新凭证并签发短期访问令牌",
+        "description": "只接受可信 Origin；浏览器携带 HttpOnly 刷新 Cookie。刷新令牌一次性使用，重放撤销整组会话；Cookie 和会话绝对有效期为 30 天，访问令牌有效期为 15 分钟。",
+        "security": [],
+        "responses": {
+          "200": {"description": "新访问令牌；Set-Cookie 携带轮换后的刷新凭证", "headers": {"Set-Cookie": {"schema": {"type": "string"}}}, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Session"}}}},
+          "401": {"description": "刷新凭证缺失、过期、撤销或重放"},
+          "403": {"description": "来源不可信"},
+          "429": {"description": "请求过于频繁"}
+        }
+      }
+    },
+    "/api/v1/me/terminal": {
+      "get": {
+        "operationId": "getOnlineTerminal",
+        "summary": "查询本账号当前在线的 SSH 终端",
+        "responses": {
+          "200": {"description": "终端不存在时 terminal 为 null", "content": {"application/json": {"schema": {"type": "object", "required": ["terminal"], "properties": {"terminal": {"type": "object", "nullable": true, "properties": {"started_at": {"type": "string", "format": "date-time"}, "last_seen_at": {"type": "string", "format": "date-time"}, "source_ip": {"type": "string"}, "credential_fingerprint": {"type": "string"}}}}}}}},
+          "401": {"description": "玩家会话无效"}
+        }
+      }
+    },
+    "/api/v1/internal/terminal/claim": {
+      "post": {"operationId": "claimTerminal", "summary": "受信网关接管账号的交互终端", "description": "要求玩家 Bearer 和 X-TTYFish-Gateway-Token；新租约撤销旧终端令牌。", "responses": {"200": {"description": "返回 lease_id", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TerminalLease"}}}}, "401": {"description": "凭证无效"}}}
+    },
+    "/api/v1/internal/terminal/heartbeat": {
+      "post": {"operationId": "heartbeatTerminal", "summary": "续期终端租约", "description": "要求网关凭证与玩家令牌；请求体为 lease_id。", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TerminalLease"}}}}, "responses": {"204": {"description": "租约已续期"}, "401": {"description": "租约或凭证无效"}}}
+    },
+    "/api/v1/internal/terminal/release": {
+      "post": {"operationId": "releaseTerminal", "summary": "释放当前终端租约", "description": "要求网关凭证与玩家令牌；请求体为 lease_id。", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TerminalLease"}}}}, "responses": {"204": {"description": "已释放"}, "401": {"description": "凭证无效"}}}
+    },
+    "/api/v1/internal/terminal/events": {
+      "post": {"operationId": "watchTerminal", "summary": "订阅终端接管事件", "description": "要求网关凭证与玩家令牌；请求体为 lease_id。SSE 事件包括 ready、heartbeat 和 revoked。", "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TerminalLease"}}}}, "responses": {"200": {"description": "SSE 事件流", "content": {"text/event-stream": {"schema": {"type": "string"}}}}, "401": {"description": "凭证或租约无效"}}}
+    },
     "/api/v1/me/points": {
       "get": {
         "operationId": "getMyPoints",
@@ -3976,6 +4012,12 @@
           "has_ssh_key"
         ]
       },
+      "TerminalLease": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lease_id"],
+        "properties": {"lease_id": {"type": "string", "description": "交互终端租约标识"}}
+      },
       "Session": {
         "type": "object",
         "additionalProperties": false,
@@ -3993,6 +4035,7 @@
           "expires_in": {
             "type": "integer",
             "enum": [
+              900,
               86400
             ]
           },

@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -257,6 +258,51 @@ func New(cfg Config) (*ssh.Server, error) {
 				})
 
 				p := tea.NewProgram(root, append(bm.MakeOptions(s), tea.WithAltScreen())...)
+				if lease, ok := s.Context().Value("terminalLease").(string); ok {
+					leaseCtx, _ := s.Context().Value("terminalLeaseContext").(context.Context)
+					kicked, _ := s.Context().Value("terminalKicked").(*atomic.Bool)
+					go func() {
+						for leaseCtx.Err() == nil {
+							err := cfg.Accounts.WatchTerminal(leaseCtx, player.Token, lease)
+							if err == backend.ErrTerminalRevoked {
+								kicked.Store(true)
+								p.Quit()
+								return
+							}
+							timer := time.NewTimer(2 * time.Second)
+							select {
+							case <-leaseCtx.Done():
+								timer.Stop()
+								return
+							case <-timer.C:
+							}
+						}
+					}()
+					go func() {
+						ticker := time.NewTicker(10 * time.Second)
+						defer ticker.Stop()
+						lastOK := time.Now()
+						for {
+							select {
+							case <-leaseCtx.Done():
+								return
+							case <-ticker.C:
+								ctx, cancel := context.WithTimeout(leaseCtx, 5*time.Second)
+								err := cfg.Accounts.HeartbeatTerminal(ctx, player.Token, lease)
+								cancel()
+								if err == nil {
+									lastOK = time.Now()
+									continue
+								}
+								if err == backend.ErrTerminalRevoked || time.Since(lastOK) >= 55*time.Second {
+									kicked.Store(true)
+									p.Quit()
+									return
+								}
+							}
+						}
+					}()
+				}
 
 				// 会话一结束就退订并通知房间"这人掉线了"。
 				// 座位会保留 60 秒，期间由电脑代打，重连即接管。
@@ -267,9 +313,43 @@ func New(cfg Config) (*ssh.Server, error) {
 				}()
 				return p
 			}, termenv.ANSI256),
+			// Claim only actual interactive shells, after the SSH handshake.
+			func(next ssh.Handler) ssh.Handler {
+				return func(s ssh.Session) {
+					if !isInteractive(s) {
+						next(s)
+						return
+					}
+					player := playerFrom(s.Context())
+					ctx, cancel := context.WithTimeout(s.Context(), 10*time.Second)
+					lease, err := cfg.Accounts.ClaimTerminal(ctx, player.Token)
+					cancel()
+					if err != nil {
+						fmt.Fprintln(s, "无法建立终端会话，请稍后重试。", err)
+						return
+					}
+					leaseCtx, stop := context.WithCancel(s.Context())
+					kicked := &atomic.Bool{}
+					s.Context().SetValue("terminalLease", lease)
+					s.Context().SetValue("terminalLeaseContext", leaseCtx)
+					s.Context().SetValue("terminalKicked", kicked)
+					next(s)
+					stop()
+					ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+					_ = cfg.Accounts.ReleaseTerminal(ctx, player.Token, lease)
+					cancel()
+					if kicked.Load() {
+						fmt.Fprintln(s, "终端会话已失效或被新连接接管。")
+					}
+				}
+			},
 			// Last middleware is outermost: finalize only after the handshake, before UI creation.
 			func(next ssh.Handler) ssh.Handler {
 				return func(s ssh.Session) {
+					if !isInteractive(s) {
+						next(s)
+						return
+					}
 					if err := finalizeKeySession(s, cfg.Accounts); err != nil {
 						fmt.Fprintf(s, "密钥登录失败：%v\n", err)
 						return

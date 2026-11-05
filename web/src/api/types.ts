@@ -47,6 +47,13 @@ export interface SessionInfo {
   current: boolean
 }
 
+export interface TerminalInfo {
+  started_at: string
+  last_seen_at: string
+  source_ip: string
+  credential_fingerprint: string
+}
+
 export interface SSHChallenge {
   username: string
   /** 给终端敲的一次性确认码 */

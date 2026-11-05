@@ -60,8 +60,14 @@ func TestGatewayUsersDoNotShareThePublicBudget(t *testing.T) {
 	w := requestFrom(t, f, "/api/v1/auth/password", "", map[string]string{"username": "passworduser", "password": "test-password-123"}, "192.0.2.1:123", map[string]string{gatewayHeader: gatewaySecret, gatewayIPHeader: "198.51.100.20"})
 	wantStatus(t, w, 200)
 	token := read[account.Session](t, w).AccessToken
-	items := sessionsFor(t, f, token)
-	if len(items) != 1 || items[0].SourceIP != "198.51.100.20" {
+	w = requestFrom(t, f, "/api/v1/internal/terminal/claim", token, nil, "192.0.2.1:123", map[string]string{gatewayHeader: gatewaySecret})
+	wantStatus(t, w, 200)
+	terminal := read[struct {
+		Terminal struct {
+			SourceIP string `json:"source_ip"`
+		} `json:"terminal"`
+	}](t, f.request("GET", "/api/v1/me/terminal", token, nil, 200))
+	if terminal.Terminal.SourceIP != "198.51.100.20" {
 		t.Fatal("verified gateway source not recorded")
 	}
 }

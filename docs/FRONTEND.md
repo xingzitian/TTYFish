@@ -7,7 +7,7 @@ Vue 3 + TypeScript + Element Plus，独立于后端构建，通过 JSON API 通�
 ```bash
 # 1. 后端（账号 API）
 cd hub
-go run ./cmd/backend -addr 127.0.0.1:8081 -db /tmp/backend.db -cors-origins http://localhost:5173
+go run ./cmd/backend -addr 127.0.0.1:8081 -db /tmp/backend.db -cors-origins http://localhost:5173 -insecure-web-cookies
 
 # 2. 前端
 cd web
@@ -30,9 +30,7 @@ npm run dev          # http://localhost:5173
 
 ## 几个刻意的决定
 
-**令牌只放内存**。后端不读 Cookie，令牌只能前端保存；放 `localStorage` 会被任意
-XSS 读到。代价是刷新页面要重新登录。以后要"刷新不掉线"，应该在**后端**加一个
-HttpOnly 的刷新令牌，而不是往 `localStorage` 里塞东西。
+**访问令牌只放内存**。浏览器通过 HttpOnly 刷新 Cookie 恢复会话；生产使用 Secure 和 SameSite=Strict，并要求 HTTPS 与同源 `/api`。本机 HTTP 调试须显式启用 `-insecure-web-cookies`。访问令牌 15 分钟有效，刷新凭证最长 30 天；同浏览器的标签页通过 Web Locks 串行轮换。轮换结果丢失或凭证被重放时可能需要重新登录。
 
 **`poll_token` 只走请求体**。后端明确禁止把它放进 URL（会进日志、进 Referer），
 所以轮询是 `POST /api/v1/auth/ssh/challenges/poll`。

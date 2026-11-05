@@ -16,6 +16,7 @@ type ClientInfo struct {
 	// DeviceID is an untrusted, browser-generated identifier used only to coalesce
 	// repeated browser logins into one revocable session.
 	DeviceID string
+	Gateway  bool
 }
 
 var deviceIDPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
@@ -64,6 +65,7 @@ func migrateSessions(db *sql.DB) error {
 		{"credential_fp", `TEXT NOT NULL DEFAULT ''`}, {"last_seen_at", `INTEGER NOT NULL DEFAULT 0`},
 		{"source_ip", `TEXT NOT NULL DEFAULT ''`}, {"user_agent", `TEXT NOT NULL DEFAULT ''`},
 		{"device_id", `TEXT NOT NULL DEFAULT ''`},
+		{"family_id", `TEXT NOT NULL DEFAULT ''`},
 	} {
 		if !columns[column.name] {
 			if _, err = tx.Exec("ALTER TABLE sessions ADD COLUMN " + column.name + " " + column.definition); err != nil {
@@ -143,8 +145,14 @@ func (s *Store) Sessions(id, token string) ([]SessionInfo, error) {
 	if !ok {
 		return nil, ErrSessionInvalid
 	}
-	rows, err := s.db.Query(`SELECT session_id,auth_method,credential_fp,created_at,expires_at,last_seen_at,source_ip,user_agent,token_hash=?,device_id
- FROM sessions WHERE account_id=? AND expires_at>? ORDER BY created_at DESC,rowid DESC`, hash(token), id, time.Now().UnixMilli())
+	rows, err := s.db.Query(`SELECT session_id,auth_method,credential_fp,created_at,expires_at,last_seen_at,source_ip,user_agent,is_current,device_id FROM (
+ SELECT session_id,auth_method,credential_fp,created_at,expires_at,last_seen_at,source_ip,user_agent,token_hash=? AS is_current,device_id,rowid AS ordering
+ FROM sessions WHERE account_id=? AND expires_at>? AND family_id='' AND note NOT IN ('terminal','gateway-auth')
+ UNION ALL
+ SELECT w.id,w.auth_method,w.credential_fp,w.created_at,w.expires_at,w.last_seen_at,w.source_ip,w.user_agent,
+ EXISTS(SELECT 1 FROM sessions c WHERE c.token_hash=? AND c.family_id=w.id),w.device_id,w.rowid
+ FROM web_sessions w WHERE w.account_id=? AND w.revoked_at=0 AND w.expires_at>?
+ ) ORDER BY created_at DESC,ordering DESC`, hash(token), id, time.Now().UnixMilli(), hash(token), id, time.Now().UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -165,8 +173,34 @@ func (s *Store) Sessions(id, token string) ([]SessionInfo, error) {
 }
 
 func (s *Store) RevokeSession(id, token, sessionID string) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	ok, err := validSession(tx, id, token)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, ErrSessionInvalid
+	}
 	now := time.Now().UnixMilli()
-	result, err := s.db.Exec(`DELETE FROM sessions WHERE account_id=? AND expires_at>?
+	web, err := tx.Exec(`UPDATE web_sessions SET revoked_at=? WHERE id=? AND account_id=? AND revoked_at=0 AND expires_at>?`, now, sessionID, id, now)
+	if err != nil {
+		return false, err
+	}
+	nweb, err := web.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if nweb > 0 {
+		if _, err = tx.Exec(`DELETE FROM sessions WHERE family_id=?`, sessionID); err != nil {
+			return false, err
+		}
+		return true, tx.Commit()
+	}
+	result, err := tx.Exec(`DELETE FROM sessions WHERE account_id=? AND expires_at>?
  AND (session_id=? OR (device_id<>'' AND device_id=(SELECT device_id FROM sessions WHERE account_id=? AND session_id=? AND device_id<>'' AND expires_at>?)))
  AND EXISTS (SELECT 1 FROM sessions caller WHERE caller.account_id=? AND caller.token_hash=? AND caller.expires_at>?)`, id, now, sessionID, id, sessionID, now, id, hash(token), now)
 	if err != nil {
@@ -174,14 +208,10 @@ func (s *Store) RevokeSession(id, token, sessionID string) (bool, error) {
 	}
 	n, err := result.RowsAffected()
 	if err != nil || n > 0 {
-		return n > 0, err
-	}
-	ok, err := validSession(s.db, id, token)
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return false, ErrSessionInvalid
+		if err != nil {
+			return false, err
+		}
+		return true, tx.Commit()
 	}
 	return false, nil
 }
@@ -206,11 +236,24 @@ func (s *Store) RevokeOtherSessions(id, token string) (int64, error) {
 	var count int64
 	if deviceID != "" {
 		err = tx.QueryRow(`SELECT COUNT(DISTINCT CASE WHEN device_id='' THEN session_id ELSE device_id END)
- FROM sessions WHERE account_id=? AND expires_at>? AND device_id<>?`, id, now, deviceID).Scan(&count)
+ FROM sessions WHERE account_id=? AND expires_at>? AND family_id='' AND device_id<>?`, id, now, deviceID).Scan(&count)
 	} else {
 		err = tx.QueryRow(`SELECT COUNT(DISTINCT CASE WHEN device_id='' THEN session_id ELSE device_id END)
- FROM sessions WHERE account_id=? AND expires_at>? AND token_hash<>?`, id, now, hash(token)).Scan(&count)
+ FROM sessions WHERE account_id=? AND expires_at>? AND family_id='' AND token_hash<>?`, id, now, hash(token)).Scan(&count)
 	}
+	if err != nil {
+		return 0, err
+	}
+	var webResult sql.Result
+	if deviceID != "" {
+		webResult, err = tx.Exec(`UPDATE web_sessions SET revoked_at=? WHERE account_id=? AND device_id<>? AND revoked_at=0 AND expires_at>?`, now, id, deviceID, now)
+	} else {
+		webResult, err = tx.Exec(`UPDATE web_sessions SET revoked_at=? WHERE account_id=? AND revoked_at=0 AND expires_at>?`, now, id, now)
+	}
+	if err != nil {
+		return 0, err
+	}
+	webCount, err := webResult.RowsAffected()
 	if err != nil {
 		return 0, err
 	}
@@ -226,7 +269,7 @@ func (s *Store) RevokeOtherSessions(id, token string) (int64, error) {
 	if _, err := result.RowsAffected(); err != nil {
 		return 0, err
 	}
-	return count, tx.Commit()
+	return count + webCount, tx.Commit()
 }
 
 // SetPasswordAndRevokeOthers preserves the current session and makes the policy atomic.
@@ -256,6 +299,14 @@ func (s *Store) SetPasswordAndRevokeOthers(id, token, password string) error {
 		return err
 	}
 	if _, err = tx.Exec(`INSERT INTO passwords(account_id,digest) VALUES(?,?) ON CONFLICT(account_id) DO UPDATE SET digest=excluded.digest`, id, digest); err != nil {
+		return err
+	}
+	if deviceID != "" {
+		_, err = tx.Exec(`UPDATE web_sessions SET revoked_at=? WHERE account_id=? AND device_id<>? AND revoked_at=0`, now, id, deviceID)
+	} else {
+		_, err = tx.Exec(`UPDATE web_sessions SET revoked_at=? WHERE account_id=? AND revoked_at=0`, now, id)
+	}
+	if err != nil {
 		return err
 	}
 	if deviceID != "" {

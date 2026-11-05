@@ -87,6 +87,40 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_account ON sessions(account_id);
 
+CREATE TABLE IF NOT EXISTS web_sessions (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  auth_method TEXT NOT NULL,
+  credential_fp TEXT NOT NULL,
+  source_ip TEXT NOT NULL,
+  user_agent TEXT NOT NULL,
+  revoked_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS web_sessions_device ON web_sessions(account_id, device_id);
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+  token_hash TEXT PRIMARY KEY,
+  family_id TEXT NOT NULL REFERENCES web_sessions(id) ON DELETE CASCADE,
+  used_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS web_access_owners (
+  token_hash TEXT PRIMARY KEY,
+  family_id TEXT NOT NULL REFERENCES web_sessions(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS terminal_sessions (
+  account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  lease_id TEXT NOT NULL UNIQUE,
+  token_hash TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  source_ip TEXT NOT NULL,
+  credential_fp TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS challenges (
   code_hash    TEXT PRIMARY KEY,
   poll_hash    TEXT NOT NULL UNIQUE,
@@ -138,6 +172,10 @@ func Open(path string) (*Store, error) {
 	if err := migrateSessions(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("升级会话数据: %w", err)
+	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO web_access_owners(token_hash,family_id) SELECT s.token_hash,s.family_id FROM sessions s JOIN web_sessions w ON w.id=s.family_id WHERE s.family_id<>''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("升级网页令牌归属: %w", err)
 	}
 	return &Store{db: db}, nil
 }
@@ -328,7 +366,7 @@ func (s *Store) SessionAccount(token string) (Account, bool, error) {
 	var accountID string
 	var expires int64
 	err := s.db.QueryRow(
-		`SELECT account_id, expires_at FROM sessions WHERE token_hash = ?`, hash(token),
+		`SELECT account_id, expires_at FROM sessions WHERE token_hash = ? AND (note<>'terminal' OR EXISTS (SELECT 1 FROM terminal_sessions t WHERE t.token_hash=sessions.token_hash AND t.expires_at>?))`, hash(token), time.Now().UnixMilli(),
 	).Scan(&accountID, &expires)
 	if err == sql.ErrNoRows {
 		return Account{}, false, nil
@@ -350,6 +388,9 @@ func (s *Store) SessionAccount(token string) (Account, bool, error) {
 	}
 	if n != 1 {
 		return Account{}, false, nil
+	}
+	if _, err = s.db.Exec(`UPDATE web_sessions SET last_seen_at=MAX(last_seen_at,?) WHERE id=(SELECT family_id FROM sessions WHERE token_hash=?) AND revoked_at=0`, time.Now().UnixMilli(), hash(token)); err != nil {
+		return Account{}, false, err
 	}
 	return s.ByID(accountID)
 }
@@ -451,6 +492,9 @@ func (s *Store) Sweep() {
 	now := time.Now().UnixMilli()
 	_, _ = s.db.Exec(`DELETE FROM challenges WHERE expires_at < ?`, now)
 	_, _ = s.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, now)
+	_, _ = s.db.Exec(`DELETE FROM web_sessions WHERE expires_at < ?`, now)
+	_, _ = s.db.Exec(`DELETE FROM sessions WHERE token_hash IN (SELECT token_hash FROM terminal_sessions WHERE expires_at < ?)`, now)
+	_, _ = s.db.Exec(`DELETE FROM terminal_sessions WHERE expires_at < ?`, now)
 }
 
 // ---- 小工具 ----

@@ -16,8 +16,16 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/xingzitian/TTYFish/games/uno"
+	"github.com/xingzitian/TTYFish/games/uno/engine"
+	"github.com/xingzitian/TTYFish/games/uno/protocol"
+	"github.com/xingzitian/TTYFish/hub/internal/account"
+	"github.com/xingzitian/TTYFish/hub/internal/api"
 	"github.com/xingzitian/TTYFish/hub/internal/backend"
+	"github.com/xingzitian/TTYFish/hub/internal/play"
 	"github.com/xingzitian/TTYFish/hub/internal/registry"
+	"github.com/xingzitian/TTYFish/hub/internal/room"
+	"github.com/xingzitian/TTYFish/hub/internal/store"
 	"github.com/xingzitian/TTYFish/sdk/game"
 	gossh "golang.org/x/crypto/ssh"
 )
@@ -64,6 +72,16 @@ func newFakeBackend(t *testing.T, gatewayToken string) *fakeBackend {
 	})
 	mux.HandleFunc("/api/v1/internal/auth/ssh", f.handleKeyLogin)
 	mux.HandleFunc("/api/v1/auth/password", f.handlePasswordLogin)
+	mux.HandleFunc("/api/v1/internal/terminal/claim", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-TTYFish-Gateway-Token") != f.gateway {
+			unauthorized(w)
+			return
+		}
+		_, _ = w.Write([]byte(`{"lease_id":"test-lease"}`))
+	})
+	for _, path := range []string{"/api/v1/internal/terminal/heartbeat", "/api/v1/internal/terminal/release"} {
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	}
 	mux.HandleFunc("/api/v1/rooms", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -139,6 +157,75 @@ func TestUnsignedKeyProbeDoesNotIssuePlayerSession(t *testing.T) {
 	fb.mu.Unlock()
 	if count != 0 {
 		t.Fatal("unsigned key probe issued a player session")
+	}
+}
+
+func TestRealTerminalTakeover(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "accounts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	key, publicKey := signer(t)
+	accounts := account.New(st)
+	a, err := accounts.Register("alice", "test-password-123", publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secret = "gateway-secret-at-least-32-bytes-long"
+	games, err := play.New([]play.Game{{ID: "uno", Rules: uno.New(engine.Rules{}), Codec: protocol.Codec{}}}, room.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer games.Close()
+	svc, err := api.New(accounts, api.Config{GatewayToken: secret, Games: games})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(svc.Handler())
+	defer server.Close()
+	fb := &fakeBackend{Server: server, gateway: secret}
+	addr := startGateway(t, fb, nil)
+	first, err := dial(t, addr, "alice", gossh.PublicKeys(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	shell1, _ := openShell(t, first)
+	defer shell1.Close()
+	done := make(chan error, 1)
+	go func() { done <- shell1.Wait() }()
+	// Verify that the first shell has actually claimed its lease.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		terminal, err := st.OnlineTerminal(a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if terminal != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first terminal never claimed a lease")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("first terminal exited before takeover: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	second, err := dial(t, addr, "alice", gossh.PublicKeys(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	shell2, _ := openShell(t, second)
+	defer shell2.Close()
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("old SSH terminal was not promptly disconnected")
 	}
 }
 

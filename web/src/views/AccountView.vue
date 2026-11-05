@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError, api } from '../api/client'
-import type { Key, Points, SessionInfo } from '../api/types'
+import type { Key, Points, SessionInfo, TerminalInfo } from '../api/types'
 import { useAuth } from '../stores/auth'
 
 const router = useRouter()
@@ -18,6 +18,11 @@ const addingKey = ref(false)
 const points = ref<Points | null>(null)
 const sessions = ref<SessionInfo[]>([])
 const sessionsLoading = ref(false)
+const terminal = ref<TerminalInfo | null>(null)
+const clock = ref(Date.now())
+let clockTimer: number | undefined
+let devicesTimer: number | undefined
+let disposed = false
 
 const newPassword = ref('')
 const revokeOthers = ref(true)
@@ -26,7 +31,7 @@ const savingPasswordLogin = ref(false)
 
 async function handleExpired(): Promise<void> {
   ElMessage.warning('登录已过期，请重新登录')
-  await auth.logout()
+  auth.clear()
   await router.push('/login')
 }
 
@@ -70,6 +75,7 @@ async function loadSessions(): Promise<void> {
   sessionsLoading.value = true
   try {
     sessions.value = (await api.listSessions()).items
+    terminal.value = (await api.onlineTerminal()).terminal
   } catch (err) {
     fail(err, '读取登录会话失败')
   } finally {
@@ -222,8 +228,12 @@ async function setPasswordLoginEnabled(enabled: boolean): Promise<void> {
 }
 
 async function doLogout(): Promise<void> {
-  await auth.logout()
-  await router.push('/login')
+  try {
+    await auth.logout()
+    await router.push('/login')
+  } catch {
+    ElMessage.error('退出失败，请检查网络后重试')
+  }
 }
 
 function shortFingerprint(fp: string): string {
@@ -236,6 +246,11 @@ function fmt(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
 }
 
+function activityLabel(iso: string): string {
+  const seen = Date.parse(iso)
+  return Number.isFinite(seen) && clock.value - seen < 5 * 60 * 1000 ? '近期活跃' : '暂不活跃'
+}
+
 function methodLabel(m: string): string {
   if (m === 'password') return '密码'
   if (m === 'ssh_key') return 'SSH 密钥'
@@ -243,6 +258,7 @@ function methodLabel(m: string): string {
 }
 
 onMounted(async () => {
+  clockTimer = window.setInterval(() => { clock.value = Date.now() }, 60_000)
   try {
     await auth.refresh()
   } catch {
@@ -250,6 +266,18 @@ onMounted(async () => {
     return
   }
   await Promise.all([loadKeys(), loadSessions(), loadPoints()])
+  if (disposed) return
+  devicesTimer = window.setInterval(() => {
+    void Promise.all([api.listSessions(), api.onlineTerminal()]).then(([web, ssh]) => {
+      sessions.value = web.items
+      terminal.value = ssh.terminal
+    }).catch(() => { /* 下次刷新再试 */ })
+  }, 15_000)
+})
+onUnmounted(() => {
+  disposed = true
+  if (clockTimer !== undefined) window.clearInterval(clockTimer)
+  if (devicesTimer !== undefined) window.clearInterval(devicesTimer)
 })
 </script>
 
@@ -290,6 +318,15 @@ onMounted(async () => {
         <p v-if="auth.state.account?.password_login_enabled && !keys.length" class="hint">
           请先添加 SSH 公钥，才能关闭密码登录。
         </p>
+      </el-card>
+
+      <el-card class="card" shadow="never">
+        <template #header><strong>在线 SSH 终端</strong></template>
+        <p v-if="terminal" class="hint">
+          来源：{{ terminal.source_ip || '—' }} · 最后心跳：{{ fmt(terminal.last_seen_at) }}
+          <span v-if="terminal.credential_fingerprint"> · 密钥：{{ shortFingerprint(terminal.credential_fingerprint) }}</span>
+        </p>
+        <p v-else class="hint">当前没有在线终端</p>
       </el-card>
 
       <el-card class="card" shadow="never">
@@ -379,6 +416,7 @@ onMounted(async () => {
           <el-table-column label="最后活跃" width="170">
             <template #default="{ row }">
               <span class="hint">{{ fmt(row.last_seen_at) }}</span>
+              <span class="hint"> · {{ activityLabel(row.last_seen_at) }}</span>
             </template>
           </el-table-column>
           <el-table-column label="" width="80" align="right">

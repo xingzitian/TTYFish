@@ -21,7 +21,7 @@ func (s *Server) clientInfo(r *http.Request, gateway bool) account.ClientInfo {
 	if !deviceIDPattern.MatchString(deviceID) {
 		deviceID = ""
 	}
-	return account.ClientInfo{SourceIP: ip, UserAgent: string(agent), DeviceID: deviceID}
+	return account.ClientInfo{SourceIP: ip, UserAgent: string(agent), DeviceID: deviceID, Gateway: gateway}
 }
 func (s *Server) sessions(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.current(w, r)

@@ -7,6 +7,7 @@ import type {
   Points,
   SessionInfo,
   SSHChallenge,
+  TerminalInfo,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -25,17 +26,17 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * 令牌只放在内存里。
- *
- * 后端明确不读 Cookie，令牌只能由前端保存；放 localStorage 会被任意 XSS 读到，
- * 所以这里只留内存——刷新页面就要重新登录，这是刻意换来的安全性。
- * 以后要"刷新不掉线"，正确做法是后端加一个 HttpOnly 的刷新令牌，而不是往
- * localStorage 里塞东西。
- */
+/** 访问令牌只保存在内存；刷新凭证由浏览器管理。 */
 let token: string | null = null
+let accountID: string | null = null
+let onSession: ((session: Session) => void) | null = null
+let pendingRefresh: Promise<Session> | null = null
 const deviceStorageKey = 'ttyfish.device-id'
 const deviceIDPattern = /^[a-f0-9]{64}$/
+
+function withCredentialLock<T>(run: () => Promise<T>): Promise<T> {
+  return navigator.locks ? navigator.locks.request('ttyfish-refresh', run) : run()
+}
 
 function browserDeviceID(): string {
   try {
@@ -51,15 +52,40 @@ function browserDeviceID(): string {
   }
 }
 
-export function setToken(next: string | null): void {
+export function setToken(next: string | null, nextAccountID: string | null = null): void {
   token = next
+  accountID = nextAccountID
+}
+
+export function setSessionHandler(handler: (session: Session) => void): void {
+  onSession = handler
+}
+
+export async function restoreSession(expectedAccountID?: string): Promise<Session> {
+  if (!pendingRefresh) {
+  const run = async (): Promise<Session> => {
+    const response = await fetch(BASE + '/api/v1/auth/refresh', { method: 'POST', credentials: 'same-origin' })
+    if (!response.ok) throw new ApiError(response.status, 'refresh_failed', '登录已失效')
+    const session = await response.json() as Session
+    return session
+  }
+  // Cookie is shared between tabs, so serialize rotation across them.
+  pendingRefresh = withCredentialLock(run)
+    .finally(() => { pendingRefresh = null })
+  }
+  const session = await pendingRefresh
+  if (expectedAccountID && session.account.id !== expectedAccountID) {
+    throw new ApiError(401, 'account_changed', '浏览器已切换账号，请重新登录')
+  }
+  onSession?.(session)
+  return session
 }
 
 export function hasToken(): boolean {
   return token !== null
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body !== undefined) {
     headers.set('Content-Type', 'application/json')
@@ -74,9 +100,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   let res: Response
   try {
-    res = await fetch(BASE + path, { ...init, headers, credentials: 'omit' })
+    const send = () => fetch(BASE + path, { ...init, headers, credentials: 'same-origin' })
+    const changesCookie = path === '/api/v1/auth/password' || path === '/api/v1/auth/ssh/challenges/poll' || path === '/api/v1/auth/logout'
+    res = await (changesCookie ? withCredentialLock(send) : send())
   } catch {
     throw new ApiError(0, 'network_error', '连不上服务器，检查网络或稍后再试')
+  }
+
+  if (res.status === 401 && retry && token && !path.startsWith('/api/v1/auth/')) {
+    await restoreSession(accountID ?? undefined)
+    return request<T>(path, init, false)
   }
 
   if (res.status === 204) {
@@ -178,6 +211,10 @@ export const api = {
 
   listSessions() {
     return request<{ items: SessionInfo[] }>('/api/v1/me/sessions')
+  },
+
+  onlineTerminal() {
+    return request<{ terminal: TerminalInfo | null }>('/api/v1/me/terminal')
   },
 
   revokeSession(id: string) {

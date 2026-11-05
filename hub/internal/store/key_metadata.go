@@ -83,7 +83,11 @@ func (s *Store) KeySessionWithInfo(id, fp string, ttl time.Duration, info Client
 	if err != nil || n != 1 {
 		return "", false, err
 	}
-	token, err := insertSession(tx, id, "api-key", "ssh_key", fp, ttl, info)
+	note := "api-key"
+	if info.Gateway {
+		note = "gateway-auth"
+	}
+	token, err := insertSession(tx, id, note, "ssh_key", fp, ttl, info)
 	if err != nil {
 		return "", false, err
 	}

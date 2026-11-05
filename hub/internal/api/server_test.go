@@ -258,8 +258,13 @@ func TestOpenAPIContractIsServed(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &spec); err != nil {
 		t.Fatal(err)
 	}
-	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 30 {
+	if spec.OpenAPI != "3.0.3" || len(spec.Paths) != 36 {
 		t.Fatalf("unexpected contract: %s, %d paths", spec.OpenAPI, len(spec.Paths))
+	}
+	for _, path := range []string{"/api/v1/auth/refresh", "/api/v1/me/terminal", "/api/v1/internal/terminal/claim", "/api/v1/internal/terminal/heartbeat", "/api/v1/internal/terminal/release", "/api/v1/internal/terminal/events"} {
+		if spec.Paths[path] == nil {
+			t.Fatalf("missing session endpoint: %s", path)
+		}
 	}
 	var points struct {
 		Get *struct {

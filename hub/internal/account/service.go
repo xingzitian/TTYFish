@@ -45,6 +45,13 @@ type Repository interface {
 	NewSession(string, string, time.Duration) (string, error)
 	SessionAccount(string) (store.Account, bool, error)
 	DropSession(string) error
+	StartWebSession(string, string, time.Duration, time.Duration) (string, error)
+	RotateWebSessionWithAccount(string, time.Duration) (string, string, store.Account, error)
+	RevokeWebSession(string, string) error
+	ClaimTerminal(string, string, time.Duration) (string, error)
+	HeartbeatTerminal(string, string, string, time.Duration) error
+	ReleaseTerminal(string, string, string) error
+	OnlineTerminal(string) (*store.TerminalInfo, error)
 	SetPassword(string, string) error
 	SetPasswordLoginEnabled(string, bool) error
 	Identities(string) ([]store.Identity, error)
@@ -165,7 +172,11 @@ func classifyConflict(err error) error {
 }
 
 func (s *Service) issue(a store.Account, info ClientInfo) (Session, error) {
-	token, err := s.repo.NewSessionWithInfo(a.ID, "api", "password", "", SessionTTL, info)
+	note := "api"
+	if info.Gateway {
+		note = "gateway-auth"
+	}
+	token, err := s.repo.NewSessionWithInfo(a.ID, note, "password", "", SessionTTL, info)
 	return Session{token, "Bearer", int64(SessionTTL.Seconds()), view(a)}, err
 }
 
@@ -230,7 +241,12 @@ func (s *Service) Current(token string) (Account, error) {
 	}
 	return view(a), nil
 }
-func (s *Service) Logout(token string) error { return s.repo.DropSession(token) }
+func (s *Service) Logout(token string) error {
+	if err := s.repo.RevokeWebSession(token, ""); err != nil {
+		return err
+	}
+	return s.repo.DropSession(token)
+}
 func (s *Service) SetPassword(id, password string) error {
 	if err := validatePassword(password); err != nil {
 		return err

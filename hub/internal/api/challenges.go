@@ -46,6 +46,9 @@ func (s *Server) confirmSSHChallenge(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pollSSHChallenge(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Device-ID") != "" && !s.checkWebOrigin(w, r) {
+		return
+	}
 	if !s.aggregate(w, r, false, "poll-source", s.rates.PollIP) {
 		return
 	}
@@ -62,6 +65,11 @@ func (s *Server) pollSSHChallenge(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		report(w, err)
 		return
+	}
+	if result.Session != nil && r.Header.Get("X-Device-ID") != "" {
+		if !s.issueWebCookie(w, r, result.Session) {
+			return
+		}
 	}
 	respond(w, http.StatusOK, result)
 }

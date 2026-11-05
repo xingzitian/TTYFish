@@ -2,6 +2,8 @@
 
 线上：`159.75.78.7`，Debian 12，systemd 托管。
 
+认证升级后，生产网页和 `/api` 必须通过同源 HTTPS 提供，并在后端 `-cors-origins` 中配置实际 HTTPS 来源。此前记录的纯 HTTP 地址无法使用默认的 Secure 刷新 Cookie；不要在生产启用 `-insecure-web-cookies`。升级前备份 SQLite；旧 Bearer 会话按原期限失效，用户重新登录后获得刷新 Cookie。回滚后旧版无法使用新 Cookie，需要重新登录。
+
 ## 日常测试部署
 
 推送到 `main` 后，CI 构建并验证后端、网关和前端。CI 成功后，部署工作流从**同一 CI run**

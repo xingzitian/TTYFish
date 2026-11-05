@@ -5,9 +5,11 @@
 package backend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +18,8 @@ import (
 	"strings"
 	"time"
 )
+
+var ErrTerminalRevoked = errors.New("终端租约已失效")
 
 // Account 是后端返回的账号信息。
 type Account struct {
@@ -110,6 +114,100 @@ func (c *Client) SetPasswordLoginEnabled(ctx context.Context, token string, enab
 		return apiError(status, raw)
 	}
 	return nil
+}
+
+func (c *Client) terminalCall(ctx context.Context, path, token, lease string) ([]byte, error) {
+	var body io.Reader
+	if lease != "" {
+		raw, _ := json.Marshal(map[string]string{"lease_id": lease})
+		body = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-TTYFish-Gateway-Token", c.gatewayToken)
+	if lease != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, ErrTerminalRevoked
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		return nil, apiError(resp.StatusCode, raw)
+	}
+	return raw, nil
+}
+func (c *Client) ClaimTerminal(ctx context.Context, token string) (string, error) {
+	raw, err := c.terminalCall(ctx, "/api/v1/internal/terminal/claim", token, "")
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Lease string `json:"lease_id"`
+	}
+	if err = json.Unmarshal(raw, &result); err != nil {
+		return "", err
+	}
+	if result.Lease == "" {
+		return "", fmt.Errorf("后端未返回终端租约")
+	}
+	return result.Lease, nil
+}
+func (c *Client) HeartbeatTerminal(ctx context.Context, token, lease string) error {
+	_, err := c.terminalCall(ctx, "/api/v1/internal/terminal/heartbeat", token, lease)
+	return err
+}
+func (c *Client) ReleaseTerminal(ctx context.Context, token, lease string) error {
+	_, err := c.terminalCall(ctx, "/api/v1/internal/terminal/release", token, lease)
+	return err
+}
+
+// WatchTerminal waits for a takeover notification; callers should reconnect on
+// transport errors and continue heartbeat-based lease checks independently.
+func (c *Client) WatchTerminal(ctx context.Context, token, lease string) error {
+	raw, err := json.Marshal(map[string]string{"lease_id": lease})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/api/v1/internal/terminal/events", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("X-TTYFish-Gateway-Token", c.gatewayToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return ErrTerminalRevoked
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("终端事件返回 HTTP %d", resp.StatusCode)
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		if scanner.Text() == "event: revoked" {
+			return ErrTerminalRevoked
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return io.EOF
 }
 
 // Points 是账号的 PT 余额。

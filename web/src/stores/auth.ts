@@ -1,5 +1,5 @@
 import { reactive, readonly } from 'vue'
-import { api, setToken } from '../api/client'
+import { ApiError, api, setToken, setSessionHandler, restoreSession } from '../api/client'
 import type { Account, Session } from '../api/types'
 
 interface AuthState {
@@ -13,12 +13,14 @@ const state = reactive<AuthState>({
   expiresAt: 0,
 })
 
+function applySession(session: Session): void {
+  setToken(session.access_token, session.account.id)
+  state.account = session.account
+  state.expiresAt = Date.now() + session.expires_in * 1000
+}
+setSessionHandler(applySession)
+
 export function useAuth() {
-  function applySession(session: Session): void {
-    setToken(session.access_token)
-    state.account = session.account
-    state.expiresAt = Date.now() + session.expires_in * 1000
-  }
 
   async function loginWithPassword(username: string, password: string): Promise<void> {
     applySession(await api.loginPassword({ username, password }))
@@ -35,10 +37,15 @@ export function useAuth() {
 
   async function logout(): Promise<void> {
     try {
+      if (state.account) await restoreSession(state.account.id)
       await api.logout()
-    } catch {
-      // 令牌可能已经过期；本地状态照样清掉
+    } catch (err) {
+      if (!(err instanceof ApiError) || err.status !== 401) throw err
     }
+    clear()
+  }
+
+  function clear(): void {
     setToken(null)
     state.account = null
     state.expiresAt = 0
@@ -54,6 +61,8 @@ export function useAuth() {
     loginWithSession,
     refresh,
     logout,
+    clear,
+    restore: restoreSession,
     isLoggedIn,
   }
 }

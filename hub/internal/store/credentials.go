@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 var ErrConflict = errors.New("用户名或公钥已被使用")
@@ -44,6 +45,9 @@ func (s *Store) RemoveIdentity(id, fp string) (bool, error) {
 		return false, ErrLastCredential
 	}
 	if _, err = tx.Exec(`DELETE FROM identities WHERE account_id=? AND fingerprint=?`, id, fp); err != nil {
+		return false, err
+	}
+	if _, err = tx.Exec(`UPDATE web_sessions SET revoked_at=? WHERE account_id=? AND credential_fp=? AND revoked_at=0`, time.Now().UnixMilli(), id, fp); err != nil {
 		return false, err
 	}
 	if _, err = tx.Exec(`DELETE FROM sessions WHERE account_id=? AND credential_fp=?`, id, fp); err != nil {

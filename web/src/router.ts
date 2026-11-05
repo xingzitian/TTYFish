@@ -29,8 +29,15 @@ export const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
+router.beforeEach(async (to) => {
   const auth = useAuth()
+  if (!auth.isLoggedIn() && auth.state.account) {
+    try {
+      await auth.restore(auth.state.account.id)
+    } catch {
+      auth.clear()
+    }
+  }
   if (to.meta.requiresAuth && !auth.isLoggedIn()) {
     return { name: 'login', query: { next: to.fullPath } }
   }
