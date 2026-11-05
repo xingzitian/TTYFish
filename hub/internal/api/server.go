@@ -83,6 +83,7 @@ func New(accounts *account.Service, cfg Config) (*Server, error) {
 	s.mux.HandleFunc("POST /api/v1/internal/terminal/release", s.releaseTerminal)
 	s.mux.HandleFunc("POST /api/v1/internal/terminal/events", s.terminalEvents)
 	s.mux.HandleFunc("GET /api/v1/me/terminal", s.onlineTerminal)
+	s.mux.HandleFunc("GET /api/v1/me/login-history", s.loginHistory)
 	s.mux.HandleFunc("GET /api/v1/me/sessions", s.sessions)
 	s.mux.HandleFunc("DELETE /api/v1/me/sessions/{id}", s.revokeSession)
 	s.mux.HandleFunc("POST /api/v1/me/sessions/revoke-others", s.revokeOtherSessions)

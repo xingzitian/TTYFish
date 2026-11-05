@@ -52,6 +52,7 @@ type Repository interface {
 	HeartbeatTerminal(string, string, string, time.Duration) error
 	ReleaseTerminal(string, string, string) error
 	OnlineTerminal(string) (*store.TerminalInfo, error)
+	LoginHistory(string, string, int, int) ([]store.LoginGroup, int, error)
 	SetPassword(string, string) error
 	SetPasswordLoginEnabled(string, bool) error
 	Identities(string) ([]store.Identity, error)

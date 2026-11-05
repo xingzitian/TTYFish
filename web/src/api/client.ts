@@ -8,6 +8,7 @@ import type {
   SessionInfo,
   SSHChallenge,
   TerminalInfo,
+  LoginGroup,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? ''
@@ -215,6 +216,12 @@ export const api = {
 
   onlineTerminal() {
     return request<{ terminal: TerminalInfo | null }>('/api/v1/me/terminal')
+  },
+
+  loginHistory(channel: 'web' | 'ssh', offset = 0, limit = 10) {
+    return request<{ items: LoginGroup[]; total: number; offset: number; limit: number }>(
+      `/api/v1/me/login-history?channel=${channel}&offset=${offset}&limit=${limit}`,
+    )
   },
 
   revokeSession(id: string) {

@@ -187,6 +187,8 @@ Invoke-RestMethod "$apiBase/api/v1/auth/logout" -Method Post -Headers $headers
 
 ## 登录会话管理
 
+账号页提供最近成功登录历史。查询 `GET /api/v1/me/login-history?channel=web|ssh&offset=0&limit=10`，按账号隔离，先归并再分页；每组带登录明细。只记录升级后的成功登录，保留 30 天及每账号最多 1000 条。完整字段和 SSH 断开状态见 [认证与会话升级](SESSION_UPGRADE.md)。
+
 使用 `GET /api/v1/me/sessions` 查询当前账号所有未过期、未撤销的会话，按创建时间降序、同时间按 ID 降序返回：
 
 ```json

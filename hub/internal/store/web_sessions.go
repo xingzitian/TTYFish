@@ -46,6 +46,9 @@ func (s *Store) StartWebSession(access, device string, accessTTL, refreshTTL tim
 	if _, err = tx.Exec(`INSERT INTO web_access_owners(token_hash,family_id) VALUES(?,?)`, hash(access), family); err != nil {
 		return "", err
 	}
+	if err = recordLogin(tx, accountID, hash(access), "web", "", now); err != nil {
+		return "", err
+	}
 	if err = tx.Commit(); err != nil {
 		return "", err
 	}

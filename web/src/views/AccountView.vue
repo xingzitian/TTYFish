@@ -3,7 +3,7 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ApiError, api } from '../api/client'
-import type { Key, Points, SessionInfo, TerminalInfo } from '../api/types'
+import type { Key, Points, SessionInfo, TerminalInfo, LoginGroup } from '../api/types'
 import { useAuth } from '../stores/auth'
 
 const router = useRouter()
@@ -19,6 +19,12 @@ const points = ref<Points | null>(null)
 const sessions = ref<SessionInfo[]>([])
 const sessionsLoading = ref(false)
 const terminal = ref<TerminalInfo | null>(null)
+const historyChannel = ref<'web' | 'ssh'>('ssh')
+const history = ref<LoginGroup[]>([])
+const historyTotal = ref(0)
+const historyPage = ref(1)
+const historyLoading = ref(false)
+let historyRequest = 0
 const clock = ref(Date.now())
 let clockTimer: number | undefined
 let devicesTimer: number | undefined
@@ -81,6 +87,32 @@ async function loadSessions(): Promise<void> {
   } finally {
     sessionsLoading.value = false
   }
+}
+
+async function loadHistory(): Promise<void> {
+  const request = ++historyRequest
+  historyLoading.value = true
+  try {
+    const result = await api.loginHistory(historyChannel.value, (historyPage.value - 1) * 10)
+    if (request === historyRequest) { history.value = result.items; historyTotal.value = result.total }
+  } catch (err) {
+    if (request === historyRequest) fail(err, '读取登录记录失败')
+  } finally {
+    if (request === historyRequest) historyLoading.value = false
+  }
+}
+
+function changeHistoryChannel(channel: string | number): void {
+  historyChannel.value = channel === 'web' ? 'web' : 'ssh'
+  historyPage.value = 1
+  void loadHistory()
+}
+
+function endLabel(reason: string): string {
+  if (reason === 'closed') return '已断开'
+  if (reason === 'replaced') return '已被接管'
+  if (reason === 'lost') return '连接失联或已失效（时间为最后活动）'
+  return '进行中或状态未知'
 }
 
 async function addKey(): Promise<void> {
@@ -254,6 +286,7 @@ function activityLabel(iso: string): string {
 function methodLabel(m: string): string {
   if (m === 'password') return '密码'
   if (m === 'ssh_key') return 'SSH 密钥'
+  if (m === 'ssh_challenge') return 'SSH 确认'
   return m
 }
 
@@ -265,7 +298,7 @@ onMounted(async () => {
     await handleExpired()
     return
   }
-  await Promise.all([loadKeys(), loadSessions(), loadPoints()])
+  await Promise.all([loadKeys(), loadSessions(), loadPoints(), loadHistory()])
   if (disposed) return
   devicesTimer = window.setInterval(() => {
     void Promise.all([api.listSessions(), api.onlineTerminal()]).then(([web, ssh]) => {
@@ -321,15 +354,6 @@ onUnmounted(() => {
       </el-card>
 
       <el-card class="card" shadow="never">
-        <template #header><strong>在线 SSH 终端</strong></template>
-        <p v-if="terminal" class="hint">
-          来源：{{ terminal.source_ip || '—' }} · 最后心跳：{{ fmt(terminal.last_seen_at) }}
-          <span v-if="terminal.credential_fingerprint"> · 密钥：{{ shortFingerprint(terminal.credential_fingerprint) }}</span>
-        </p>
-        <p v-else class="hint">当前没有在线终端</p>
-      </el-card>
-
-      <el-card class="card" shadow="never">
         <template #header>
           <div style="display: flex; justify-content: space-between; align-items: center">
             <strong>SSH 公钥</strong>
@@ -382,7 +406,7 @@ onUnmounted(() => {
       <el-card class="card" shadow="never">
         <template #header>
           <div style="display: flex; justify-content: space-between; align-items: center">
-            <strong>登录设备 / 浏览器</strong>
+            <strong>Web 登录设备</strong>
             <div>
               <el-button text size="small" :loading="sessionsLoading" @click="loadSessions">
                 刷新
@@ -394,7 +418,7 @@ onUnmounted(() => {
           </div>
         </template>
 
-        <el-table :data="sessions" size="small" empty-text="没有登录记录">
+        <el-table :data="sessions" size="small" empty-text="没有有效的 Web 登录">
           <el-table-column label="方式" width="100">
             <template #default="{ row }">
               <span>{{ methodLabel(row.auth_method) }}</span>
@@ -433,6 +457,50 @@ onUnmounted(() => {
             </template>
           </el-table-column>
         </el-table>
+      </el-card>
+
+      <el-card class="card" shadow="never">
+        <template #header><strong>当前 SSH 终端</strong></template>
+        <p v-if="terminal" class="hint">
+          来源：{{ terminal.source_ip || '—' }} · {{ methodLabel(terminal.auth_method) }} · 连接时间：{{ fmt(terminal.started_at) }} · 最后心跳：{{ fmt(terminal.last_seen_at) }}
+          <span v-if="terminal.credential_fingerprint"> · 密钥：{{ terminal.key_name || shortFingerprint(terminal.credential_fingerprint) }}</span>
+        </p>
+        <p v-else class="hint">当前没有在线终端</p>
+      </el-card>
+
+      <el-card class="card" shadow="never">
+        <template #header>
+          <div style="display: flex; justify-content: space-between; align-items: center">
+            <strong>最近成功登录</strong>
+            <el-button text size="small" :loading="historyLoading" @click="loadHistory">刷新</el-button>
+          </div>
+        </template>
+        <p class="hint">只显示启用记录后的成功登录，保留 30 天、最多 1000 条。来源和密钥不能确定物理设备。</p>
+        <el-radio-group :model-value="historyChannel" @change="changeHistoryChannel">
+          <el-radio-button value="ssh">SSH</el-radio-button>
+          <el-radio-button value="web">Web</el-radio-button>
+        </el-radio-group>
+        <el-table v-loading="historyLoading" :data="history" size="small" empty-text="暂无记录" style="width: 100%; margin-top: 12px">
+          <el-table-column type="expand">
+            <template #default="{ row }">
+              <div style="padding: 8px 20px">
+                <p v-for="event in row.events" :key="event.id" class="hint">
+                  {{ fmt(event.started_at) }} · {{ methodLabel(event.auth_method) }} · {{ event.source_ip || '来源未知' }}
+                  <template v-if="historyChannel === 'ssh'"> · {{ endLabel(event.end_reason) }}<template v-if="event.ended_at">：{{ fmt(event.ended_at) }}</template></template>
+                  <template v-if="event.key_name"> · {{ event.key_name }}</template>
+                  <span v-if="event.credential_fingerprint" style="overflow-wrap: anywhere"> · {{ event.credential_fingerprint }}</span>
+                  <template v-if="historyChannel === 'web' && event.user_agent"> · {{ event.user_agent }}</template>
+                </p>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column label="最近登录" min-width="160"><template #default="{ row }">{{ fmt(row.latest_at) }}</template></el-table-column>
+          <el-table-column label="来源 / 设备" min-width="200">
+            <template #default="{ row }"><span class="hint">{{ row.source_ip || '来源未知' }}<template v-if="historyChannel === 'ssh' && row.credential_fingerprint"> · {{ row.key_name || shortFingerprint(row.credential_fingerprint) }}</template><template v-if="historyChannel === 'web' && row.user_agent"> · {{ row.user_agent }}</template></span></template>
+          </el-table-column>
+          <el-table-column prop="count" label="次数" width="70" />
+        </el-table>
+        <el-pagination v-if="historyTotal > 10" v-model:current-page="historyPage" :page-size="10" :total="historyTotal" layout="prev, pager, next" @current-change="loadHistory" />
       </el-card>
 
       <el-card class="card" shadow="never">

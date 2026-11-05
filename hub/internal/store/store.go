@@ -121,6 +121,24 @@ CREATE TABLE IF NOT EXISTS terminal_sessions (
   credential_fp TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS login_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL CHECK(channel IN ('web','ssh')),
+  auth_method TEXT NOT NULL,
+  source_ip TEXT NOT NULL DEFAULT '',
+  credential_fp TEXT NOT NULL DEFAULT '',
+  key_name TEXT NOT NULL DEFAULT '',
+  device_id TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  end_reason TEXT NOT NULL DEFAULT '',
+  lease_id TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS login_history_account_time ON login_history(account_id, started_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS login_history_lease ON login_history(lease_id) WHERE lease_id<>'';
+
 CREATE TABLE IF NOT EXISTS challenges (
   code_hash    TEXT PRIMARY KEY,
   poll_hash    TEXT NOT NULL UNIQUE,
@@ -496,6 +514,8 @@ func (s *Store) Consume(poll string) error {
 // Sweep 清掉过期的挑战和会话。
 func (s *Store) Sweep() {
 	now := time.Now().UnixMilli()
+	_, _ = s.db.Exec(`UPDATE login_history SET ended_at=(SELECT last_seen_at FROM terminal_sessions WHERE terminal_sessions.lease_id=login_history.lease_id),end_reason='lost' WHERE ended_at IS NULL AND channel='ssh' AND lease_id IN (SELECT lease_id FROM terminal_sessions WHERE expires_at < ?)`, now)
+	_, _ = s.db.Exec(`DELETE FROM login_history WHERE started_at < ?`, time.Now().Add(-loginHistoryRetention).UnixMilli())
 	_, _ = s.db.Exec(`DELETE FROM challenges WHERE expires_at < ?`, now)
 	_, _ = s.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, now)
 	_, _ = s.db.Exec(`DELETE FROM web_sessions WHERE expires_at < ?`, now)

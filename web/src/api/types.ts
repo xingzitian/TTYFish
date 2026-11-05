@@ -52,6 +52,31 @@ export interface TerminalInfo {
   last_seen_at: string
   source_ip: string
   credential_fingerprint: string
+  auth_method: string
+  key_name: string
+}
+
+export interface LoginEvent {
+  id: number
+  auth_method: string
+  source_ip: string
+  credential_fingerprint: string
+  key_name: string
+  user_agent: string
+  started_at: string
+  ended_at: string | null
+  end_reason: string
+}
+
+export interface LoginGroup {
+  auth_method: string
+  source_ip: string
+  credential_fingerprint: string
+  key_name: string
+  user_agent: string
+  latest_at: string
+  count: number
+  events: LoginEvent[]
 }
 
 export interface SSHChallenge {
