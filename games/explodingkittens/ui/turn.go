@@ -90,9 +90,7 @@ func (m *Model) turnMarquee(width int) string {
 	if start < 0 {
 		start += tapeW
 	}
-	// Repeat enough for the two-player table too (three visible slots).
-	band := strings.Repeat(tape.String(), 4)
-	window := ansi.Cut(band, start, start+3*slot+10)
+	window := ui.CyclicWindow(tape.String(), start, 3*slot+10)
 	return ui.PadRight(window, width)
 }
 
@@ -115,16 +113,5 @@ func (m *Model) compactPlayers(width int) []string {
 		}
 		items = append(items, label+")")
 	}
-	if len(items) == 0 {
-		items = append(items, "（还没有玩家）")
-	}
-	var rows []string
-	for start := 0; start < len(items); start += 3 {
-		prefix := "         "
-		if start == 0 {
-			prefix = "[PLAYER] "
-		}
-		rows = append(rows, wrapTokens(items[start:min(start+3, len(items))], prefix, width)...)
-	}
-	return rows
+	return ui.PlayerRows(items, width, 3, "[PLAYER] ")
 }

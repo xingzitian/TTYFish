@@ -25,6 +25,11 @@ func (m *Model) View() string {
 	if m.help {
 		return ui.ClampFrame(m.viewHelp(), m.width, m.height)
 	}
+	if m.step == stepChat {
+		// The shortcut menu owns the keyboard; keep every choice visible even
+		// when the underlying table or lobby would exhaust the terminal height.
+		return ui.ClampFrame(m.cmdLine(m.width), m.width, m.height)
+	}
 	if !m.inGame() {
 		return ui.ClampFrame(m.viewLobby(), m.width, m.height)
 	}
@@ -129,11 +134,14 @@ func (m *Model) statusLine(width int) string {
 // hint 按"阶段 + 选择进度"只说一件事。
 func (m *Model) hint() string {
 	if !m.inGame() {
-		return "按 S 开局（房主）· B 加电脑 · V 投票重开"
+		if !m.snap.IsHost {
+			return "等待房主开始"
+		}
+		return strings.Join(ui.ActionTokens(ui.SelectActions(lobbyActions, "s", "b", "v")), " · ")
 	}
 	o := m.obs()
 	if !m.alive() {
-		return "你已淘汰，可以观战或按 Esc 离开"
+		return "你已淘汰，可以观战或按 " + ui.EscapeAction("").DisplayKey() + " 离开"
 	}
 	if m.step == stepChat {
 		return "选择快捷语，按对应数字发送"
@@ -170,7 +178,9 @@ func (m *Model) hint() string {
 			}
 			response := "等待其他玩家"
 			if m.canNope() {
-				response = "[N]反否决 / 否决"
+				for _, action := range ui.SelectActions(responseActions, "n") {
+					response = action.Token() + " / 反否决"
+				}
 			}
 			return fmt.Sprintf("%s 的 %s：%s %s (%s)",
 				actor, m.token(o.Pending.Kind), state, fmtSeconds(m.deadline), response)
@@ -190,7 +200,12 @@ func (m *Model) hint() string {
 			return fmt.Sprintf("等待 %s 拆弹并秘密放回炸弹", m.seatName(o.Turn))
 		}
 		if m.step == stepDefuseCustom {
-			return fmt.Sprintf("埋雷位置: 第 %d 张（位置 %d），-= 调整，Enter 确认", m.pos+1, m.pos)
+			keys := ui.CombinedKeyHint("", ui.SelectActions(customPositionActions, "previous", "next")...).DisplayKey()
+			confirm := ""
+			for _, action := range ui.SelectActions(customPositionActions, "confirm") {
+				confirm = action.DisplayKey()
+			}
+			return fmt.Sprintf("埋雷位置: 第 %d 张（位置 %d），%s 调整，%s 确认", m.pos+1, m.pos, keys, confirm)
 		}
 		return "摸到【爆炸猫】！请选择秘密放回位置，确认时自动使用拆弹牌："
 	}
@@ -210,80 +225,99 @@ func (m *Model) hint() string {
 	if !m.myTurn() {
 		return fmt.Sprintf("等 %s 出牌…", m.seatName(o.Turn))
 	}
-	return "轮到你：按数字出功能牌，或按 D 摸牌"
+	for _, action := range ui.SelectActions(playActions, "d") {
+		return "轮到你：按数字出功能牌，或按 " + action.DisplayKey() + " 摸牌"
+	}
+	return "轮到你出牌"
 }
 
 // cmdLine 是 [CMD]：分阶段的按键表 / 选择器。
 //
 // 超宽时按完整操作项折行，不隐藏仍可使用的键。
 func (m *Model) cmdLine(width int) string {
-	return m.dim().Render(strings.Join(m.commandRows(width), "\n"))
+	return strings.Join(m.commandRows(width), "\n")
 }
 
-// cmdTokens 返回 [CMD] 行里的按键项和前缀。
-func (m *Model) cmdTokens() ([]string, string) {
+// commandActions returns the current contextual operations and their prefix.
+func (m *Model) commandActions() ([]ui.Action, string) {
 	o := m.obs()
 	if m.step == stepChat {
-		return m.chatTokens(), ">> 快捷语: "
+		return append(chatActions(), ui.EscapeAction("取消")), ">> 快捷语: "
 	}
 
 	// 选目标：整行变成选择器
 	if m.step == stepTarget {
-		return m.targetTokens(), ">> 选择目标: "
+		return m.targetMenuActions(), ">> 选择目标: "
 	}
 
 	// 埋雷：整行变成位置选择器
 	if o.Phase == engine.Reinserting && m.alive() && o.Seat == o.Turn {
 		if m.step == stepDefuseCustom {
-			return []string{fmt.Sprintf("[%d]", m.pos), "[-=]调整", "[Enter]确认", "[Esc]返回"},
+			return append([]ui.Action{{Label: fmt.Sprintf("[%d]", m.pos)}}, customPositionActions...),
 				">> 埋雷位置: "
 		}
-		return []string{
-			"[0]牌堆顶", "[1]第2张", "[2]第3张",
-			"[B]牌堆底", "[R]随机", fmt.Sprintf("[I]指定(0-%d)", o.DeckCount),
-		}, ">> 埋雷位置: "
+		actions := append([]ui.Action(nil), reinsertActions...)
+		for i := range actions {
+			if actions[i].ID == "i" {
+				actions[i].Label = fmt.Sprintf("%s(0-%d)", actions[i].Label, o.DeckCount)
+			}
+		}
+		return actions, ">> 埋雷位置: "
 	}
 
-	tokens := []string{"[?]帮助"}
+	actions := ui.SelectActions(commonActions, "help")
 	if !m.inGame() {
 		if m.snap.IsHost {
-			tokens = append(tokens, "[S]开始", "[B]电脑")
+			actions = append(actions, ui.SelectActions(lobbyActions, "s", "b")...)
 		} else {
-			tokens = append(tokens, "等待房主开始")
+			actions = append(actions, ui.Action{Label: "等待房主开始"})
 		}
-		tokens = append(tokens, "[V]投票", "[T]聊天", "[I]界面", "[Esc]离开")
-		return tokens, "[CMD] "
+		actions = append(actions, ui.SelectActions(lobbyActions, "v")...)
+		actions = append(actions, ui.SelectActions(commonActions, "chat", "layout")...)
+		actions = append(actions, ui.EscapeAction("离开"))
+		return actions, "[CMD] "
 	}
 	if !m.alive() {
-		return []string{"[?]帮助", "[Tab]玩家", "[Esc]离开"}, "[CMD] "
+		return append(ui.SelectActions(commonActions, "help", "players"), ui.EscapeAction("离开")), "[CMD] "
 	}
 
 	switch o.Phase {
 	case engine.Responding:
 		if m.canNope() {
-			tokens = append(tokens, fmt.Sprintf("[N]否决(%d)", m.nopeCount()))
+			for _, action := range ui.SelectActions(responseActions, "n") {
+				action.Label = fmt.Sprintf("%s(%d)", action.Label, m.nopeCount())
+				actions = append(actions, action)
+			}
 		}
 		if !m.passed() && m.passSent != responseKey(o) {
-			tokens = append(tokens, "[P]放弃")
+			actions = append(actions, ui.SelectActions(responseActions, "p")...)
 		}
-		return append(tokens, "[T]聊天", "[Tab]玩家"), "[CMD] "
+		return append(actions, ui.SelectActions(commonActions, "chat", "players")...), "[CMD] "
 	case engine.Giving:
 		if o.Pending != nil && o.Pending.Action.Target == o.Seat {
-			return []string{"[?]帮助", "[1-5]交牌", "[-=]翻页", "[T]聊天", "[Tab]玩家"}, "[CMD] "
+			give := cardAction
+			give.Label = "交牌"
+			actions = append(actions, give, ui.CombinedKeyHint("翻页", ui.SelectActions(commonActions, "previous", "next")...))
+			return append(actions, ui.SelectActions(commonActions, "chat", "players")...), "[CMD] "
 		}
 	}
 	if !m.myTurn() {
-		return []string{"[?]帮助", "[T]聊天", "[Tab]玩家", "[-=]翻页"}, "[CMD] "
+		return append(ui.SelectActions(commonActions, "help", "chat", "players"), ui.CombinedKeyHint("翻页", ui.SelectActions(commonActions, "previous", "next")...)), "[CMD] "
 	}
 	_, pairs := m.pairKind()
-	tokens = []string{
-		"[?]帮助", "[1-5]出牌", fmt.Sprintf("[G]对子盲抽(%d)", pairs),
-		"[D]摸牌",
+	actions = append(ui.SelectActions(commonActions, "help"), cardAction)
+	play := append([]ui.Action(nil), playActions...)
+	for i := range play {
+		if play[i].ID == "g" {
+			play[i].Label = fmt.Sprintf("%s(%d)", play[i].Label, pairs)
+		}
 	}
+	actions = append(actions, play...)
 	if len(m.revealed) > 0 && m.revealLeft() >= 0 {
-		tokens = append(tokens, "[P]结束预言")
+		actions = append(actions, revealAction)
 	}
-	return append(tokens, "[T]聊天", "[Tab]玩家", "[-=]翻页"), "[CMD] "
+	actions = append(actions, ui.SelectActions(commonActions, "chat", "players")...)
+	return append(actions, ui.CombinedKeyHint("翻页", ui.SelectActions(commonActions, "previous", "next")...)), "[CMD] "
 }
 
 // playerLines 列出每个座位：名字、手牌数、是否淘汰。

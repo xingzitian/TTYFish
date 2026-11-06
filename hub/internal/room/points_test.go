@@ -67,6 +67,9 @@ func TestFinalSettlementAllActionPaths(t *testing.T) {
 			if err != nil || snap.SettlementRevision != 1 {
 				t.Fatalf("settlement revision not published: %+v %v", snap, err)
 			}
+			if snap.Notice != "Alice 赢得本局！" {
+				t.Fatalf("unexpected game-independent result notice: %q", snap.Notice)
+			}
 			r.afterStateLocked()
 			r.tick()
 			if calls != 1 {

@@ -98,7 +98,9 @@ func (m *Model) viewLobby() string {
 		lines = append(lines, m.warn().Render("! "+m.errMsg))
 	}
 	if m.snap.IsHost && m.snap.Phase == client.Lobby && len(m.snap.Players) < (kittens.Game{}).MinSeats() {
-		lines = append(lines, m.dim().Render("至少 2 人才能开局，可按 B 添加电脑"))
+		for _, action := range ui.SelectActions(lobbyActions, "b") {
+			lines = append(lines, m.dim().Render("至少 2 人才能开局，可按 "+action.DisplayKey()+" 添加电脑"))
+		}
 	}
 	lines = append(lines, m.cmdLine(m.width))
 	for i := range lines {

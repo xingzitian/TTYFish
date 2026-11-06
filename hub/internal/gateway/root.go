@@ -307,22 +307,24 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Esc / q 在牌桌上是"退出房间、回上一级"，不是断线。
 		// 但游戏正在弹窗（选色/聊天/质疑/老板键）时，Esc 归游戏处理，
 		// 否则玩家连弹窗都退不出去。
-		if key, ok := msg.(tea.KeyMsg); ok && !r.gameHasModal() {
+		if key, ok := msg.(tea.KeyMsg); ok && (r.confirmLeave || !r.gameHasModal()) {
+			cancel, _ := sdkui.ResolveAction([]sdkui.Action{sdkui.EscapeAction("")}, key.String())
 			switch {
 			case r.confirmLeave:
 				// 确认中只认几个键，其它一律忽略——这时最怕误触。
 				// q 仍然保留：万一确认框让人以为卡死了，老板键必须还能用。
-				switch key.String() {
-				case "y":
+				action, _ := sdkui.ResolveAction(leaveConfirmActions, key.String())
+				switch action {
+				case "leave":
 					return r, r.leaveRoom()
-				case "n", "esc":
+				case "stay":
 					return r, r.setConfirmLeave(false)
-				case "q":
+				case "quit":
 					r.quit = true
 					return r, tea.Quit
 				}
 				return r, nil
-			case key.String() == "esc":
+			case cancel == "cancel":
 				// 对局进行中才问：手快按一下不至于把打了一半的局丢了。
 				// 大厅里（还没开局）离开是低风险操作，直接走，别让人以为卡住了。
 				if r.inGame() {
@@ -435,7 +437,7 @@ func (r *Root) gameMsg(msg tea.Msg) tea.Msg {
 func (r *Root) handleKey(k tea.KeyMsg) tea.Cmd {
 	key := k.String()
 
-	if key == "ctrl+c" {
+	if action, _ := sdkui.ResolveAction([]sdkui.Action{sdkui.InterruptAction()}, key); action == "interrupt" {
 		r.quit = true
 		return tea.Quit
 	}
@@ -445,19 +447,20 @@ func (r *Root) handleKey(k tea.KeyMsg) tea.Cmd {
 	}
 
 	// 菜单：-= 和方向键移动，数字直选，回车确认，Esc 返回
-	switch key {
-	case "-", "up", "k":
+	action, _ := sdkui.ResolveAction(menuActions, key)
+	switch action {
+	case "previous":
 		r.menu.Move(-1)
 		return nil
-	case "=", "down", "j":
+	case "next":
 		r.menu.Move(1)
 		return nil
-	case "esc":
+	case "cancel":
 		return r.back()
-	case "q":
+	case "quit":
 		r.quit = true
 		return tea.Quit
-	case "enter", " ":
+	case "select":
 		return r.pick(r.menu.Cursor())
 	}
 
@@ -558,11 +561,12 @@ func (r *Root) pick(idx int) tea.Cmd {
 }
 
 func (r *Root) handleJoinKey(k tea.KeyMsg, key string) tea.Cmd {
-	switch key {
-	case "esc":
+	action, _ := sdkui.ResolveAction(joinActions, key)
+	switch action {
+	case "cancel":
 		r.gotoLevel(levelGame)
 		return nil
-	case "enter":
+	case "join":
 		return r.openRoom(strings.ToUpper(strings.TrimSpace(r.join.Value())))
 	}
 	var cmd tea.Cmd
@@ -628,7 +632,7 @@ func (r *Root) View() string {
 			if r.deps.Mode == sdkui.ColorNone {
 				warn = r.deps.Renderer.NewStyle().Bold(true)
 			}
-			out += "\n" + warn.Render("[ASK] 离开这局？  [Y]退出对局  [N]继续打")
+			out += "\n" + warn.Render("[ASK] 离开这局？  "+strings.Join(sdkui.ActionTokens(sdkui.SelectActions(leaveConfirmActions, "leave", "stay")), "  "))
 		}
 		return out
 	}
@@ -684,18 +688,24 @@ func (r *Root) cmdLine() string {
 	if r.level == levelSettings && r.settingsMessage != "" {
 		return "[MSG] " + r.settingsMessage
 	}
-	hint := "[CMD] -=切换 Enter选择 Esc 返回"
+	actions := sdkui.SelectActions(menuActions, "previous", "next", "select", "cancel")
 	if r.level == levelHome {
-		hint = "[CMD] -=切换 Enter选择 Esc 退出"
-	}
-	if r.level == levelJoin {
-		hint = "[CMD] [1-6]输入 Enter进入 Esc返回"
+		for i := range actions {
+			if actions[i].ID == "cancel" {
+				actions[i].Label = "退出"
+			}
+		}
+	} else if r.level == levelJoin {
+		actions = append([]sdkui.Action{{Label: "输入房间码"}}, joinActions...)
 	}
 	dim := r.deps.Renderer.NewStyle().Foreground(lipgloss.Color("244"))
+	hot := r.deps.Renderer.NewStyle().Foreground(lipgloss.Color("226")).Bold(true)
 	if r.deps.Mode == sdkui.ColorNone {
 		dim = r.deps.Renderer.NewStyle()
+		hot = r.deps.Renderer.NewStyle().Bold(true)
 	}
-	return dim.Render(hint)
+	items := sdkui.RenderActions(actions, dim.Render, hot.Render)
+	return strings.Join(sdkui.WrapTokens(items, dim.Render("[CMD] "), r.width), "\n")
 }
 
 // Close 释放订阅；不离开房间（座位要留给重连）。

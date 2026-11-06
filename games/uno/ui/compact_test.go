@@ -48,7 +48,7 @@ func TestSortHandStable(t *testing.T) {
 	}
 }
 
-// TestCompactLines 极简模式的形状：不超过 6 行，每行不超宽。
+// TestCompactLines 极简模式需要容纳折行的命令，每行不超宽。
 func TestCompactLines(t *testing.T) {
 	for _, w := range []int{80, 60, 40} {
 		snap := sampleSnap(20241029)
@@ -57,7 +57,7 @@ func TestCompactLines(t *testing.T) {
 
 		out := strip(m.View())
 		lines := strings.Split(out, "\n")
-		if len(lines) > 6 {
+		if len(lines) > m.height {
 			t.Fatalf("宽度 %d：行数 %d 太多\n%s", w, len(lines), out)
 		}
 		for i, line := range lines {

@@ -2,11 +2,11 @@ package tui
 
 import (
 	"fmt"
-	"strings"
+	"strconv"
 
-	"github.com/charmbracelet/x/ansi"
 	"github.com/xingzitian/TTYFish/games/explodingkittens/engine"
 	"github.com/xingzitian/TTYFish/sdk/client"
+	"github.com/xingzitian/TTYFish/sdk/ui"
 )
 
 func responseKey(o engine.Observation) string {
@@ -44,53 +44,45 @@ func (m *Model) targets() []int {
 	return seats
 }
 
-func (m *Model) targetTokens() []string {
+func (m *Model) targetActions() []ui.Action {
 	targets := m.targets()
 	pages := max(1, (len(targets)+1)/2)
 	m.targetPage = clampInt(m.targetPage, 0, pages-1)
 	start := m.targetPage * 2
-	var tokens []string
+	var actions []ui.Action
 	for i, seat := range targets[start:min(start+2, len(targets))] {
-		tokens = append(tokens, fmt.Sprintf("[%d]%s(%d)", i+1, m.seatName(seat), m.obs().HandCounts[seat]))
+		key := strconv.Itoa(i + 1)
+		actions = append(actions, ui.Action{ID: strconv.Itoa(seat), Key: key, Label: fmt.Sprintf("%s(%d)", m.seatName(seat), m.obs().HandCounts[seat])})
 	}
-	if pages > 1 {
-		tokens = append(tokens, fmt.Sprintf("[-=]%d/%d页", m.targetPage+1, pages))
-	}
-	return append(tokens, "[Esc]取消")
+	return actions
 }
 
-func (m *Model) chatTokens() []string {
-	var tokens []string
-	for i, text := range client.Presets {
-		tokens = append(tokens, fmt.Sprintf("[%d]%s", i+1, text))
+func (m *Model) targetMenuActions() []ui.Action {
+	actions := m.targetActions()
+	pages := max(1, (len(m.targets())+1)/2)
+	if pages > 1 {
+		actions = append(actions, ui.CombinedKeyHint(fmt.Sprintf("%d/%d页", m.targetPage+1, pages), ui.SelectActions(commonActions, "previous", "next")...))
 	}
-	return append(tokens, "[Esc]取消")
+	if m.target >= 0 {
+		actions = append(actions, targetConfirmAction)
+	}
+	return append(actions, ui.EscapeAction("取消"))
+}
+
+func (m *Model) targetTokens() []string {
+	return ui.ActionTokens(m.targetMenuActions())
+}
+
+func chatActions() []ui.Action {
+	return ui.NumberedActions(client.Presets)
 }
 
 // Wrap complete command items instead of silently hiding usable keys.
 func (m *Model) commandRows(width int) []string {
-	tokens, prefix := m.cmdTokens()
-	return wrapTokens(tokens, prefix, width)
+	actions, prefix := m.commandActions()
+	return wrapTokens(ui.RenderActions(actions, m.dim().Render, m.turn().Render), m.dim().Render(prefix), width)
 }
 
 func wrapTokens(tokens []string, prefix string, width int) []string {
-	var rows []string
-	line := prefix
-	indent := strings.Repeat(" ", min(lipglossWidth(prefix), max(0, width-1)))
-	for _, token := range tokens {
-		separator := ""
-		if line != prefix && line != indent {
-			separator = " "
-		}
-		if lipglossWidth(line+separator+token) > width && line != prefix && line != indent {
-			rows = append(rows, line)
-			line, separator = indent, ""
-		}
-		line += separator + token
-	}
-	rows = append(rows, line)
-	for i := range rows {
-		rows[i] = ansi.Truncate(rows[i], width, "")
-	}
-	return rows
+	return ui.WrapTokens(tokens, prefix, width)
 }

@@ -105,3 +105,68 @@ func TestCompactCmdFitsWithCJK(t *testing.T) {
 }
 
 var _ = client.Playing
+
+func TestCompactCommandsWrapWithoutDroppingKeys(t *testing.T) {
+	for _, height := range []int{10, 24} {
+		m := testModel(t, 40, sampleSnap(20241029))
+		m.minimal, m.height = true, height
+		view := strip(m.View())
+		for _, token := range []string{"[1-5]出牌", "[D]摸牌", "[C]抓包", "[Tab]玩家", "[I]界面"} {
+			if !strings.Contains(view, token) {
+				t.Fatalf("height %d: missing %s\n%s", height, token, view)
+			}
+		}
+	}
+}
+
+func TestCompactModalCommandsWrapWithoutDroppingKeys(t *testing.T) {
+	challenge := testModel(t, 40, challengeSnap())
+	challenge.minimal, challenge.height = true, 10
+	view := strip(challenge.View())
+	for _, token := range []string{"[Y]认罚摸4", "[N]质疑"} {
+		if !strings.Contains(view, token) {
+			t.Fatalf("missing %s\n%s", token, view)
+		}
+	}
+	color := testModel(t, 40, sampleSnap(20241029))
+	color.minimal, color.height, color.choosing = true, 10, true
+	view = strip(color.View())
+	for _, token := range []string{"[1]红", "[2]黄", "[3]蓝", "[4]绿", "[Esc]取消"} {
+		if !strings.Contains(view, token) {
+			t.Fatalf("missing %s\n%s", token, view)
+		}
+	}
+}
+
+func TestRichTableCommandsFitAtMinimumTerminalSize(t *testing.T) {
+	m, _ := playingState(false).model()
+	m.width, m.height = 40, 10
+	view := strip(m.View())
+	for _, token := range []string{"[?]帮助", "[D]摸牌", "[C]抓包", "[Q]断开"} {
+		if !strings.Contains(view, token) {
+			t.Fatalf("missing %s at 40x10:\n%s", token, view)
+		}
+	}
+}
+
+func TestChatModalFitsBothLayoutsAndLobby(t *testing.T) {
+	for _, compact := range []bool{false, true} {
+		for _, lobby := range []bool{false, true} {
+			state := playingState(compact)
+			if lobby {
+				state = lobbyState(compact)
+			}
+			m, _ := state.model()
+			m.width, m.height, m.chat = 40, 10, true
+			view := strip(m.View())
+			for _, text := range client.Presets {
+				if !strings.Contains(view, text) {
+					t.Fatalf("compact=%v lobby=%v missing %q:\n%s", compact, lobby, text, view)
+				}
+			}
+			if !strings.Contains(view, "取消") || strings.Contains(view, "[D]摸牌") {
+				t.Fatalf("wrong modal controls:\n%s", view)
+			}
+		}
+	}
+}

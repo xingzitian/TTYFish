@@ -260,6 +260,11 @@ func (m *Model) render() string {
 		return m.dim().Render("连接已断开。重新 ssh 上来还能回到刚才的房间。") + "\n"
 	case m.snap.Code == "":
 		return m.dim().Render("连接中…") + "\n"
+	case m.chat:
+		if m.minimal {
+			return m.viewCompactChat()
+		}
+		return m.viewChat()
 	case m.snap.Phase != client.Playing:
 		if m.minimal {
 			return m.viewCompactLobby()
@@ -461,12 +466,8 @@ func (m *Model) viewLobby() string {
 		b.WriteString(m.ok().Render(fmt.Sprintf("%s 赢了这一局，+%d 分", m.name(w), m.obs().Scores[w])) + "\n")
 	}
 
-	keys := "等房主开始"
-	if m.snap.IsHost {
-		keys = "s 开始 · b 补一个电脑"
-	}
-	keys += " · ? 帮助 · i 界面 · t 聊天 · l 离开"
-	b.WriteString(m.dim().Render(keys))
+	items := ui.RenderActions(m.currentLobbyActions(), m.dim().Render, m.turn().Render)
+	b.WriteString(strings.Join(ui.WrapTokens(items, "", m.width), "\n"))
 	if m.errMsg != "" {
 		b.WriteString("\n" + m.warn().Render("! "+m.errMsg))
 	}
@@ -483,6 +484,23 @@ const (
 )
 
 func (m *Model) viewTable(withLog bool, players playerLayout) string {
+	// On a short single-column terminal, reserve room for the actionable keys.
+	// The ordinary opponent list and spacer can otherwise push them below the
+	// frame even though the command component itself wrapped correctly.
+	if withLog && players == playersHorizontal && !m.chat {
+		hand := m.viewHand()
+		if m.choosing {
+			hand = m.viewColorMenu()
+		}
+		essential := strings.Join([]string{m.viewTurn(), m.viewTableCards(), hand, m.viewStatus()}, "\n")
+		fullHeight := lipgloss.Height(essential) + lipgloss.Height(m.viewOpponents()) + 1
+		if m.width >= 60 && m.obs().Phase == engine.Playing {
+			fullHeight++
+		}
+		if fullHeight > m.height {
+			return essential
+		}
+	}
 	var b strings.Builder
 	b.WriteString(m.viewTurn())
 	b.WriteString("\n")
@@ -628,9 +646,13 @@ func (m *Model) viewSide(width, height int) string {
 // 完整键位已经搬到 ? 里了：这块以前要占八行，现在只留一行入口，
 // 省下来的高度全给出牌记录——记录比键位表更值得看。
 func (m *Model) keyLines() []string {
+	key := "?"
+	for _, action := range ui.SelectActions(commonActions, "?") {
+		key = action.DisplayKey()
+	}
 	return []string{
 		"",
-		m.dim().Render("按 ? 看全部按键"),
+		m.dim().Render("按 " + key + " 看全部按键"),
 	}
 }
 
@@ -766,11 +788,16 @@ func (m *Model) viewStatus() string {
 		if secs < 0 {
 			secs = 0
 		}
-		return m.warn().Render(fmt.Sprintf("你只剩一张牌！按 u 喊 UNO（还剩 %d 秒）", secs))
+		key := "?"
+		for _, action := range ui.SelectActions(playActions, "u") {
+			key = strings.ToLower(action.Key)
+		}
+		return m.warn().Render(fmt.Sprintf("你只剩一张牌！按 %s 喊 UNO（还剩 %d 秒）", key, secs)) + "\n" +
+			m.dim().Render(strings.Join(ui.WrapTokens(ui.ActionTokens(m.tableActions()), "", m.width), "\n"))
 
 	case obs.Challenge != nil && obs.Challenge.By == m.snap.MySeat:
 		return m.warn().Render("对方打出 [*|+4]！") +
-			"   c 质疑（他手里还有同色牌就算耍赖）  ·  Enter 认罚摸 4 张"
+			"   " + strings.Join(ui.ActionTokens(challengeActions), "  ·  ") + "（他手里还有同色牌就算耍赖）"
 
 	case obs.Challenge != nil:
 		return m.dim().Render(fmt.Sprintf("等 %s 决定要不要质疑这个 +4…", m.name(obs.Challenge.By)))
@@ -794,27 +821,21 @@ func (m *Model) viewStatus() string {
 		return line + m.dim().Render(" · v 重开投票 · q 退出")
 
 	case obs.Turn != m.snap.MySeat:
-		return m.dim().Render(m.fitHint([]string{
-			"等对方出牌…", "[?]帮助", "[T]聊天", "[V]重开投票", "[Q]断开",
-		}, m.width))
+		items := append([]string{"等对方出牌…"}, ui.ActionTokens(m.tableActions())...)
+		return m.dim().Render(strings.Join(ui.WrapTokens(items, "", m.width), "\n"))
 	}
 
-	// 提示按宽度收敛：够宽就全给，窄了整项丢。
-	// 以前是固定长字符串，终端一窄就把左边撑宽，右边那栏被挤出屏幕。
-	hint := m.fitHint([]string{
-		"[?]帮助", "[1-9]出牌", "[-=]翻页", "[D]摸", "[P]过",
-		"[U]喊UNO", "[T]聊天", "[Q]断开",
-	}, m.width)
+	// 与极简模式共用操作定义，并按完整项目折行。
+	items := ui.ActionTokens(m.tableActions())
+	hint := strings.Join(ui.WrapTokens(items, "", m.width), "\n")
 	if obs.DrawnID >= 0 {
-		hint = m.fitHint([]string{
-			"刚摸到能出的牌：按它的数字打出", "[P] 留着跳过",
-		}, m.width)
+		hint = "刚摸到能出的牌：按它的数字打出\n" + hint
 	}
 	if m.errMsg != "" {
 		return m.warn().Render("! "+m.errMsg) + "\n" + m.dim().Render(hint)
 	}
 	if m.snap.Vote != nil {
-		hint = fmt.Sprintf("重开投票 %d/%d（v 同意）  ", m.snap.Vote.Yes, m.snap.Vote.Need) + hint
+		hint = fmt.Sprintf("重开投票 %d/%d（v 同意）\n", m.snap.Vote.Yes, m.snap.Vote.Need) + hint
 	}
 	return m.dim().Render(hint)
 }
@@ -842,18 +863,20 @@ func (m *Model) fitHint(tokens []string, width int) string {
 
 // viewColorMenu 是打变色牌时占掉手牌那几行的一行内联菜单。
 func (m *Model) viewColorMenu() string {
-	return m.turn().Render("打出变色牌，选颜色： ") +
-		m.renderCard(engine.Card{Color: engine.Red}, "1 红", false) +
-		m.renderCard(engine.Card{Color: engine.Yellow}, "2 黄", false) +
-		m.renderCard(engine.Card{Color: engine.Blue}, "3 蓝", false) +
-		m.renderCard(engine.Card{Color: engine.Green}, "4 绿", false)
+	colors := map[string]engine.Color{"red": engine.Red, "yellow": engine.Yellow, "blue": engine.Blue, "green": engine.Green}
+	var out strings.Builder
+	out.WriteString(m.turn().Render("打出变色牌，选颜色： "))
+	for _, action := range ui.SelectActions(colorActions, "red", "yellow", "blue", "green") {
+		out.WriteString(m.renderCard(engine.Card{Color: colors[action.ID]}, action.Key+" "+action.Label, false))
+	}
+	return out.String()
 }
 
 func (m *Model) viewChat() string {
 	var b strings.Builder
-	b.WriteString(m.dim().Render("快捷语（数字选择，esc 取消）") + "\n")
-	for i, p := range client.Presets {
-		b.WriteString(fmt.Sprintf("  %d %s\n", i+1, p))
+	b.WriteString(m.dim().Render("快捷语（数字选择，"+ui.EscapeAction("").DisplayKey()+" 取消）") + "\n")
+	for _, action := range ui.NumberedActions(client.Presets) {
+		b.WriteString(fmt.Sprintf("  %s %s\n", action.Key, action.Label))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

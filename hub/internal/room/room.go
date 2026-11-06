@@ -798,7 +798,7 @@ func (r *Room) afterStateLocked() {
 	r.vote = nil
 	w := r.Game.RoundWinner(r.state)
 	if w >= 0 && w < len(r.seats) {
-		r.setNotice(fmt.Sprintf("%s 打完手牌！", r.seats[w].name))
+		r.setNotice(fmt.Sprintf("%s 赢得本局！", r.seats[w].name))
 	}
 }
 

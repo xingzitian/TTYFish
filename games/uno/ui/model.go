@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -251,7 +252,7 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 
 	// 老板键：Ctrl+B 立刻把整屏换成一段像样的 shell 输出，回车或 Esc 回来。
 	// 放在最前面，任何状态下都能用。
-	if key == "ctrl+b" {
+	if action, _ := ui.ResolveAction([]ui.Action{ui.BossAction()}, key); action == "boss" {
 		m.boss = !m.boss
 		return nil
 	}
@@ -259,8 +260,9 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	// 键位一览：只认关闭键，免得看着帮助时误触出牌。
 	// ? 和 / 都能开关——有人习惯按 /（斜杠键位置更顺手）。
 	if m.help {
-		switch key {
-		case "?", "/", "esc":
+		action, _ := ui.ResolveAction(ui.HelpActions(commonActions, "?", "q"), key)
+		switch action {
+		case "close-help", "cancel":
 			m.help = false
 		case "q":
 			// 老板键在帮助界面里照样有效，不能因为看着帮助就失联
@@ -269,13 +271,13 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	if m.boss {
-		if key == "enter" || key == "esc" {
+		if action, _ := ui.ResolveAction([]ui.Action{ui.BossExitAction(true)}, key); action == "cancel" {
 			m.boss = false
 		}
 		return nil
 	}
 
-	if key == "ctrl+c" {
+	if action, _ := ui.ResolveAction([]ui.Action{ui.InterruptAction()}, key); action == "interrupt" {
 		return m.quit()
 	}
 
@@ -284,12 +286,10 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	}
 
 	if m.chat {
-		switch {
-		case key == "esc":
+		if action, _ := ui.ResolveAction([]ui.Action{ui.EscapeAction("")}, key); action == "cancel" {
 			m.chat = false
-		case len(key) == 1 && key[0] >= '1' && key[0] <= '9':
-			idx := int(key[0] - '1')
-			if idx < len(client.Presets) && m.c != nil {
+		} else if id, ok := ui.ResolveAction(ui.NumberedActions(client.Presets), key); ok {
+			if idx, err := strconv.Atoi(id); err == nil && m.c != nil {
 				if err := m.c.Chat(idx); err != nil {
 					m.fail(err.Error())
 				} else {
@@ -297,16 +297,19 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 				}
 			}
 			m.chat = false
+		} else if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+			m.chat = false
 		}
 		return nil
 	}
 
 	// 首次登录的界面选择：只认 1 / 2，别的键一律忽略，免得误触进了牌桌
 	if m.needLayoutChoice {
-		switch key {
-		case "1":
+		action, _ := ui.ResolveAction(layoutChoiceActions, key)
+		switch action {
+		case "rich":
 			m.applyLayout(ui.LayoutRich)
-		case "2":
+		case "compact":
 			m.applyLayout(ui.LayoutCompact)
 		}
 		return nil
@@ -320,24 +323,25 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 
 	// 变色牌选色是模态的，优先级最高。
 	if m.choosing {
-		switch key {
-		case "r", "1":
+		action, _ := ui.ResolveAction(colorActions, key)
+		switch action {
+		case "red":
 			m.playWild(engine.Red)
-		case "y", "2":
+		case "yellow":
 			m.playWild(engine.Yellow)
-		case "b", "3":
+		case "blue":
 			m.playWild(engine.Blue)
-		case "g", "4":
+		case "green":
 			m.playWild(engine.Green)
-		case "esc":
+		case "cancel":
 			m.choosing = false
 			m.pending = engine.Card{}
 		}
 		return nil
 	}
 
-	switch key {
-	case "?", "/":
+	switch commonActionKey(key) {
+	case "?":
 		m.help = true
 		return nil
 	case "q":
@@ -370,7 +374,8 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 
 	// 大厅 / 结算界面：可以离开，房主可以补电脑、开局。
 	if m.snap.Phase != client.Playing {
-		switch key {
+		action, _ := ui.ResolveAction(lobbyActions, key)
+		switch action {
 		case "l":
 			m.leave()
 		case "s":
@@ -387,7 +392,7 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 					m.fail("")
 				}
 			}
-		case "b", "c":
+		case "b":
 			if !m.snap.IsHost {
 				m.fail("只有房主能加电脑")
 				return nil
@@ -407,46 +412,41 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 
 	// +4 质疑是模态的：轮到你决定时，其他牌桌按键都不该生效。
 	if obs.Challenge != nil && obs.Challenge.By == m.snap.MySeat {
-		switch key {
-		case "n", "c":
+		action, _ := ui.ResolveAction(challengeActions, key)
+		switch action {
+		case "challenge":
 			m.act(engine.ResolveChallenge{Seat: m.snap.MySeat, Challenge: true})
-		case "y", "enter", " ":
+		case "accept":
 			m.act(engine.ResolveChallenge{Seat: m.snap.MySeat, Challenge: false})
 		}
 		return nil
 	}
 
 	// 翻页不属于"出牌动作"：轮不到我也应该能翻看自己的牌。
-	switch key {
-	case "-", "_", "left":
+	switch commonActionKey(key) {
+	case "-":
 		m.prevPage()
 		return nil
-	case "=", "+", "right":
+	case "=":
 		m.nextPage()
 		return nil
 	}
 
+	action := m.tableActionKey(key)
+	if action == "u" || action == "c" {
+		return m.handleSharedKey(key)
+	}
 	if obs.Turn != m.snap.MySeat || obs.Phase != engine.Playing {
 		return nil
 	}
 
-	switch key {
+	switch action {
 	case "d":
 		m.act(engine.DrawCard{Seat: m.snap.MySeat})
 	case "p":
 		m.act(engine.Pass{Seat: m.snap.MySeat})
-	case "u":
-		m.act(engine.CallUno{Seat: m.snap.MySeat})
-	case "c":
-		if obs.UnoPending >= 0 {
-			m.act(engine.CatchUno{Seat: m.snap.MySeat, Target: obs.UnoPending})
-		} else {
-			m.fail("现在没有人漏喊 UNO")
-		}
-	default:
-		if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
-			m.playIndex(int(key[0] - '1'))
-		}
+	case "card":
+		m.playIndex(int(key[0] - '1'))
 	}
 	return nil
 }

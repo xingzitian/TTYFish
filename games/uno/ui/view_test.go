@@ -121,7 +121,7 @@ func TestViewLobby(t *testing.T) {
 
 	m := testModel(t, 70, snap)
 	out := strip(m.View())
-	for _, want := range []string{"房间 ABC234", "电脑A", "掉线", "s 开始"} {
+	for _, want := range []string{"房间 ABC234", "电脑A", "掉线", "[S]开始"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("大厅界面缺少 %q:\n%s", want, out)
 		}

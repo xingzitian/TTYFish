@@ -17,11 +17,15 @@ import (
 type modalModel struct {
 	modal   bool
 	forward int // 收到多少次按键
+	keys    int
 }
 
 func (m *modalModel) Init() tea.Cmd { return nil }
-func (m *modalModel) Update(tea.Msg) (tea.Model, tea.Cmd) {
+func (m *modalModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.forward++
+	if _, ok := msg.(tea.KeyMsg); ok {
+		m.keys++
+	}
 	return m, nil
 }
 func (m *modalModel) View() string   { return "牌桌" }
@@ -126,6 +130,21 @@ func TestEscLeavesWhenNoModal(t *testing.T) {
 	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if r.level != levelGame {
 		t.Fatalf("确认后应该离开房间，实际 %v", r.level)
+	}
+}
+
+func TestLeaveConfirmationKeepsPriorityIfGameOpensModal(t *testing.T) {
+	model := &modalModel{}
+	r := newEscRoot(t, model)
+	pressEsc(r)
+	if !r.confirmLeave {
+		t.Fatal("expected leave confirmation")
+	}
+	model.modal = true
+	forwarded := model.keys
+	pressEsc(r)
+	if r.confirmLeave || model.keys != forwarded {
+		t.Fatal("confirmation must receive Esc before a newly opened game modal")
 	}
 }
 

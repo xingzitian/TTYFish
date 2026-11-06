@@ -72,6 +72,18 @@ func JoinWrapped(parts []string, width int) string {
 	return b.String()
 }
 
+// CyclicWindow views a repeating, ANSI-styled seat strip at a cell offset.
+// Repeating as needed also handles tables with fewer seats than visible slots.
+func CyclicWindow(strip string, start, width int) string {
+	stripWidth := lipgloss.Width(strip)
+	if stripWidth == 0 || width <= 0 {
+		return ""
+	}
+	start = ((start % stripWidth) + stripWidth) % stripWidth
+	repeats := (start+width+stripWidth-1)/stripWidth + 1
+	return ansi.Cut(strings.Repeat(strip, repeats), start, start+width)
+}
+
 // TailN 取最后 n 个元素。
 func TailN[T any](xs []T, n int) []T {
 	if n <= 0 {

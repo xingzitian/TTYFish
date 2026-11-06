@@ -58,6 +58,35 @@ func TestBothModesSameKeys(t *testing.T) {
 	}
 }
 
+func TestCallAndCatchRemainAvailableOutsideYourTurn(t *testing.T) {
+	for _, minimal := range []bool{false, true} {
+		for _, tc := range []struct{ key, action string }{{"u", "CallUno"}, {"c", "CatchUno"}} {
+			state := playingState(minimal)
+			setObs(&state.snap, func(o *engine.Observation) { o.Turn = 1; o.UnoPending = 1 })
+			m, rec := state.model()
+			m.handleKey(keyOf(tc.key))
+			if len(rec.calls) != 1 || !strings.Contains(rec.calls[0], tc.action) {
+				t.Fatalf("minimal=%v key=%s: calls=%v", minimal, tc.key, rec.calls)
+			}
+		}
+	}
+}
+
+func TestDrawIsUnavailableOutsideYourTurnInBothLayouts(t *testing.T) {
+	for _, minimal := range []bool{false, true} {
+		state := playingState(minimal)
+		setObs(&state.snap, func(o *engine.Observation) { o.Turn = 1 })
+		m, rec := state.model()
+		m.handleKey(keyOf("d"))
+		if len(rec.calls) != 0 {
+			t.Fatalf("minimal=%v: draw dispatched outside turn: %v", minimal, rec.calls)
+		}
+		if strings.Contains(strip(m.View()), "[D]摸牌") {
+			t.Fatalf("minimal=%v: unavailable draw was advertised", minimal)
+		}
+	}
+}
+
 // TestNoCursorEnterPlay 丰富模式不再有"回车出牌"：回车什么都不做。
 func TestNoCursorEnterPlay(t *testing.T) {
 	m := playingState(false).modelWith(t)

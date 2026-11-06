@@ -103,106 +103,81 @@ func (m *Model) compactHand(width int) []string {
 
 // viewHelp 是键位一览：按当前阶段只列能用的键。
 func (m *Model) viewHelp() string {
-	groups := m.keyHelp()
-	title := m.turn().Render("[KEY] 键位一览")
-	hint := m.dim().Render("按 ? / 或 Esc 关闭")
-	head := title
-	if pad := m.width - lipglossWidth("[KEY] 键位一览") - lipglossWidth(hint); pad > 0 {
-		head += strings.Repeat(" ", pad) + hint
-	}
-	lines := []string{head}
-	for _, g := range groups {
-		lines = append(lines, m.helpGroupLines(g)...)
-	}
-	return strings.Join(lines, "\n")
+	return ui.RenderHelp(m.keyHelp(), m.width, "[KEY] 键位一览", ui.HelpCloseHint(ui.HelpActions(commonActions, "help", "quit")), m.dim().Render, m.turn().Render)
 }
 
-type helpGroup struct {
-	Title string
-	Keys  [][2]string
-}
-
-func (m *Model) keyHelp() []helpGroup {
-	common := helpGroup{Title: "通用", Keys: [][2]string{
-		{"?", "帮助"}, {"/", "帮助"}, {"I", "切换界面"}, {"M", "颜色深浅"},
-		{"Tab", "玩家列表"}, {"-=", "翻页"}, {"Ctrl+B", "老板键"},
-	}}
-	room := helpGroup{Title: "房间", Keys: [][2]string{
-		{"Esc", "取消选择 / 离开房间"}, {"Q", "断开连接"},
-	}}
+func (m *Model) keyHelp() []ui.ActionGroup {
+	common := ui.ActionGroup{Title: "通用"}
+	for _, action := range ui.SelectActions(commonActions, "help", "layout", "color", "players") {
+		common.Actions = append(common.Actions, action)
+		if action.ID == "help" {
+			common.Actions = append(common.Actions, ui.Action{Key: "/", Label: action.HelpLabel()})
+		}
+	}
+	common.Actions = append(common.Actions, ui.CombinedKeyHint("翻页", ui.SelectActions(commonActions, "previous", "next")...), ui.BossAction())
+	room := ui.ActionGroup{Title: "房间", Actions: ui.SelectActions(commonActions, "cancel", "quit")}
 
 	if !m.inGame() {
-		keys := [][2]string{{"S", "开始游戏"}, {"B", "加电脑"}, {"V", "投票重开"}}
+		keys := lobbyActions
 		if !m.snap.IsHost {
-			keys = [][2]string{{"—", "等房主开始"}}
+			keys = []ui.Action{{Key: "—", Label: "等房主开始"}}
 		}
-		return []helpGroup{{Title: "大厅", Keys: keys}, common, room}
+		return []ui.ActionGroup{{Title: "大厅", Actions: keys}, common, room}
 	}
 
 	o := m.obs()
 	if m.alive() {
-		common.Keys = append(common.Keys, [2]string{"T", "快捷语"})
+		common.Actions = append(common.Actions, ui.SelectActions(commonActions, "chat")...)
 	}
 	if o.Phase == engine.Reinserting && o.Turn == o.Seat {
-		common.Keys[2] = [2]string{"I", "指定埋雷位置"}
+		for i := range common.Actions {
+			if common.Actions[i].ID == "layout" {
+				for _, action := range ui.SelectActions(reinsertActions, "i") {
+					action.Detail = "指定埋雷位置"
+					common.Actions[i] = action
+				}
+			}
+		}
 	}
 	if m.step == stepTarget {
-		return []helpGroup{{Title: "目标", Keys: [][2]string{
-			{"1-2", "立即选择本页目标"}, {"-=", "目标翻页"}, {"Esc", "取消"},
-		}}, common, room}
+		targets := m.targetActions()
+		targets = append(targets, ui.CombinedKeyHint("目标翻页", ui.SelectActions(commonActions, "previous", "next")...), ui.EscapeAction("取消"))
+		return []ui.ActionGroup{{Title: "目标", Actions: targets}, common, room}
 	}
 	if m.step == stepChat {
-		return []helpGroup{{Title: "聊天", Keys: [][2]string{
-			{"1-6", "发送对应快捷语"}, {"Esc", "取消"},
-		}}, common, room}
+		return []ui.ActionGroup{{Title: "聊天", Actions: append(chatActions(), ui.EscapeAction("取消"))}, common, room}
 	}
 	if !m.alive() || (o.Phase == engine.Playing && !m.myTurn()) ||
 		(o.Phase == engine.Giving && (o.Pending == nil || o.Pending.Action.Target != o.Seat)) ||
 		(o.Phase == engine.Reinserting && o.Turn != o.Seat) {
-		return []helpGroup{common, room}
+		return []ui.ActionGroup{common, room}
 	}
-	var play helpGroup
+	var play ui.ActionGroup
 	switch o.Phase {
 	case engine.Responding:
-		play = helpGroup{Title: "响应"}
+		play = ui.ActionGroup{Title: "响应"}
 		if m.canNope() {
-			play.Keys = append(play.Keys, [2]string{"N", "否决 / 反否决"})
+			for _, action := range ui.SelectActions(responseActions, "n") {
+				action.Detail = action.Label + " / 反否决"
+				play.Actions = append(play.Actions, action)
+			}
 		}
 		if !m.passed() && m.passSent != responseKey(o) {
-			play.Keys = append(play.Keys, [2]string{"P", "放弃"})
+			play.Actions = append(play.Actions, ui.SelectActions(responseActions, "p")...)
 		}
-		play.Keys = append(play.Keys, [2]string{"T", "快捷语"})
+		play.Actions = append(play.Actions, ui.SelectActions(commonActions, "chat")...)
 	case engine.Giving:
-		play = helpGroup{Title: "交牌", Keys: [][2]string{{"1-5", "把这张交出去"}}}
+		play = ui.ActionGroup{Title: "交牌", Actions: []ui.Action{{Key: "1-5", Label: "把这张交出去"}}}
 	case engine.Reinserting:
-		play = helpGroup{Title: "埋雷", Keys: [][2]string{
-			{"0", "牌堆顶"}, {"1", "第2张"}, {"2", "第3张"},
-			{"B", "牌堆底"}, {"R", "随机"}, {"I", "指定位置"},
-		}}
-	default:
-		play = helpGroup{Title: "出牌", Keys: [][2]string{
-			{"1-5", "出功能牌"}, {"G", "对子盲抽"}, {"D", "摸牌"},
-			{"T", "快捷语"}, {"Esc", "取消选择"},
-		}}
-	}
-	return []helpGroup{play, common, room}
-}
-
-func (m *Model) helpGroupLines(g helpGroup) []string {
-	prefix := fmt.Sprintf("%-5s", "["+g.Title+"]")
-	line := m.dim().Render(prefix)
-	width := lipglossWidth(prefix)
-	var out []string
-	for _, kv := range g.Keys {
-		tok := "[" + kv[0] + "]" + kv[1]
-		w := lipglossWidth(tok) + 1
-		if width+w > m.width && width > lipglossWidth(prefix) {
-			out = append(out, line)
-			line = m.dim().Render(prefix)
-			width = lipglossWidth(prefix)
+		if m.step == stepDefuseCustom {
+			play = ui.ActionGroup{Title: "埋雷", Actions: customPositionActions}
+		} else {
+			play = ui.ActionGroup{Title: "埋雷", Actions: reinsertActions}
 		}
-		line += " " + m.turn().Render("["+kv[0]+"]") + kv[1]
-		width += w
+	default:
+		play = ui.ActionGroup{Title: "出牌", Actions: append([]ui.Action{cardAction}, playActions...)}
+		play.Actions = append(play.Actions, ui.SelectActions(commonActions, "chat")...)
+		play.Actions = append(play.Actions, ui.EscapeAction("取消选择"))
 	}
-	return append(out, line)
+	return []ui.ActionGroup{play, common, room}
 }

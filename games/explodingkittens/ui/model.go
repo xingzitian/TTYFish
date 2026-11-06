@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -343,30 +344,36 @@ func (m *Model) nopeCount() int {
 func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	key := strings.ToLower(k.String())
 
-	if key == "ctrl+b" {
+	if action, _ := ui.ResolveAction([]ui.Action{ui.BossAction()}, key); action == "boss" {
 		m.boss = !m.boss
 		return nil
 	}
 	if m.boss {
-		if key == "esc" {
+		if action, _ := ui.ResolveAction([]ui.Action{ui.BossExitAction(false)}, key); action == "cancel" {
 			m.boss = false
 		}
 		return nil
 	}
 	if m.help {
-		switch key {
-		case "?", "/", "esc":
+		action, _ := ui.ResolveAction(ui.HelpActions(commonActions, "help", "quit"), key)
+		switch action {
+		case "close-help", "cancel":
 			m.help = false
-		case "q":
+		case "quit":
 			return tea.Quit
 		}
 		return nil
 	}
-	if m.showPlayers() && key == "esc" {
+	if action, _ := ui.ResolveAction([]ui.Action{ui.InterruptAction()}, key); action == "interrupt" {
+		return tea.Quit
+	}
+	cancel, _ := ui.ResolveAction([]ui.Action{ui.EscapeAction("")}, key)
+	if m.showPlayers() && cancel == "cancel" {
 		m.playersAt = time.Time{}
 		return nil
 	}
-	if key == "i" && m.inGame() && m.alive() &&
+	reinsertAction, _ := ui.ResolveAction(reinsertActions, key)
+	if reinsertAction == "i" && m.inGame() && m.alive() &&
 		m.obs().Phase == engine.Reinserting && m.obs().Turn == m.snap.MySeat {
 		m.step = stepDefuseCustom
 		m.pos = 0
@@ -374,61 +381,64 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	if m.step == stepDefuseCustom {
-		switch key {
-		case "-", "pageup", "pgup":
+		action, _ := ui.ResolveAction(customPositionActions, key)
+		switch action {
+		case "previous":
 			m.advancePage(-1)
 			return nil
-		case "=", "pagedown", "pgdown":
+		case "next":
 			m.advancePage(1)
 			return nil
-		case "enter", " ":
+		case "confirm":
 			m.useDefuse(m.obs(), m.pos)
 			return nil
-		case "esc":
+		case "cancel":
 			m.step = stepDefusePos
 			return nil
 		}
 	}
-	switch key {
-	case "?", "/":
+	commonAction, _ := ui.ResolveAction(commonActions, key)
+	switch commonAction {
+	case "help":
 		m.help = true
 		return nil
-	case "i":
+	case "layout":
 		m.toggleLayout()
 		return nil
-	case "m":
+	case "color":
 		m.opts.Mode = m.opts.Mode.Next()
 		if m.opts.SetMode != nil {
 			m.opts.SetMode(m.opts.Key, m.opts.Mode)
 		}
 		return nil
-	case "tab":
+	case "players":
 		if m.showPlayers() {
 			m.playersAt = time.Time{}
 		} else {
 			m.playersAt = time.Now().Add(playerPanelTTL)
 		}
 		return nil
-	case "pagedown", "pgdown", "=":
+	case "next":
 		m.advancePage(1)
 		return nil
-	case "pageup", "pgup", "-":
+	case "previous":
 		m.advancePage(-1)
 		return nil
-	case "esc":
+	case "cancel":
 		if m.step != stepIdle {
 			m.reset()
 			m.say()
 		}
 		return nil
-	case "q":
+	case "quit":
 		// 老板键：任何时候都是立刻断开
 		return tea.Quit
 	}
 
 	o := m.obs()
 	if m.step == stepChat {
-		if idx, ok := digit(key); ok && idx < len(client.Presets) && m.c != nil {
+		id, ok := ui.ResolveAction(chatActions(), key)
+		if idx, err := strconv.Atoi(id); ok && err == nil && m.c != nil {
 			if err := m.c.Chat(idx); err != nil {
 				m.fail(err.Error())
 			} else {
@@ -438,7 +448,7 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if key == "t" && (!m.inGame() || m.alive()) {
+	if commonAction == "chat" && (!m.inGame() || m.alive()) {
 		m.step = stepChat
 		return nil
 	}
@@ -449,7 +459,9 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	if !m.alive() {
 		return nil
 	}
-	if key == "p" && o.Phase == engine.Playing && len(m.revealed) > 0 {
+	current, _ := m.commandActions()
+	reveal, _ := ui.ResolveAction(current, key)
+	if reveal == revealAction.ID && o.Phase == engine.Playing && len(m.revealed) > 0 {
 		m.clearReveal()
 		return nil
 	}
@@ -489,11 +501,14 @@ func (m *Model) advancePage(delta int) {
 
 func (m *Model) handlePlaying(key string) tea.Cmd {
 	o := m.obs()
-	if idx, ok := digit(key); ok {
+	actions, _ := m.commandActions()
+	action, _ := ui.ResolveAction(actions, key)
+	if action == cardAction.ID {
+		idx, _ := digit(key)
 		m.pickCard(idx)
 		return nil
 	}
-	switch key {
+	switch action {
 	case "d":
 		m.act(engine.Action{Type: engine.Draw, Seat: o.Seat, Target: -1})
 	case "g":
@@ -548,26 +563,27 @@ func (m *Model) startPair() {
 
 func (m *Model) handleTarget(key string) tea.Cmd {
 	o := m.obs()
-	if idx, ok := digit(key); ok {
-		targets := m.targets()
-		index := m.targetPage*2 + idx
-		if idx >= 2 || index >= len(targets) {
+	if _, ok := digit(key); ok {
+		id, found := ui.ResolveAction(m.targetActions(), key)
+		target, err := strconv.Atoi(id)
+		if !found || err != nil {
 			m.fail("选一个还有手牌的对手")
 			return nil
 		}
-		m.target = targets[index]
+		m.target = target
 		m.say()
 		m.submitTarget(o)
 		return nil
 	}
-	switch key {
-	case "enter", " ":
+	action, _ := ui.ResolveAction([]ui.Action{targetConfirmAction, ui.EscapeAction("")}, key)
+	switch action {
+	case "confirm-target":
 		if m.target < 0 {
 			m.fail("先按数字选目标")
 			return nil
 		}
 		m.submitTarget(o)
-	case "esc":
+	case "cancel":
 		m.reset()
 		m.say()
 	}
@@ -606,7 +622,8 @@ func (m *Model) submitTarget(o engine.Observation) {
 // handleResponding：按 N 打出否决，按 P 放弃。
 func (m *Model) handleResponding(key string) tea.Cmd {
 	o := m.obs()
-	switch key {
+	action, _ := ui.ResolveAction(responseActions, key)
+	switch action {
 	case "n":
 		if m.nopeCount() == 0 {
 			m.fail("你手里没有否决牌")
@@ -639,7 +656,9 @@ func (m *Model) handleGiving(key string) tea.Cmd {
 	if o.Pending == nil || o.Pending.Action.Target != o.Seat {
 		return nil
 	}
-	if idx, ok := digit(key); ok {
+	actions, _ := m.commandActions()
+	if action, _ := ui.ResolveAction(actions, key); action == cardAction.ID {
+		idx, _ := digit(key)
 		page, _ := m.pageCards()
 		if idx >= len(page) {
 			return nil
@@ -658,16 +677,12 @@ func (m *Model) handleReinserting(key string) tea.Cmd {
 		return nil
 	}
 	if m.step == stepDefuseCustom {
-		switch key {
-		case "enter", " ":
-			m.useDefuse(o, m.pos)
-		case "esc":
-			m.step = stepDefusePos
-		}
+		// Custom-position keys were already dispatched by handleKey's modal scope.
 		return nil
 	}
 
-	switch key {
+	action, _ := ui.ResolveAction(reinsertActions, key)
+	switch action {
 	case "0":
 		m.useDefuse(o, 0)
 	case "1":
@@ -701,7 +716,8 @@ func (m *Model) useDefuse(o engine.Observation, position int) {
 }
 
 func (m *Model) lobbyKey(key string) {
-	switch key {
+	action, _ := ui.ResolveAction(lobbyActions, key)
+	switch action {
 	case "s":
 		if !m.snap.IsHost || m.c == nil {
 			m.fail("只有房主能开局，等房主按 S")

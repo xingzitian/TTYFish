@@ -152,21 +152,22 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 	//   y 认罚摸 4 张   n 质疑（他手里还有同色牌就算耍赖）
 	// 出 +4 的那家**不参与回应**——引擎直接查他手牌，这是抓耍赖，不是谈判。
 	if m.pendingChallenge() != nil {
-		switch key {
-		case "y", "enter", " ":
+		action, _ := ui.ResolveAction(challengeActions, key)
+		switch action {
+		case "accept":
 			m.act(engine.ResolveChallenge{Seat: m.snap.MySeat, Challenge: false})
 			return nil
-		case "n", "c":
+		case "challenge":
 			m.act(engine.ResolveChallenge{Seat: m.snap.MySeat, Challenge: true})
 			return nil
-		case "i":
+		}
+		if commonActionKey(key) == "i" {
 			m.toggleLayout()
-			return nil
 		}
 		return nil
 	}
 
-	switch key {
+	switch commonActionKey(key) {
 	case "q":
 		return m.quit()
 	case "m":
@@ -176,7 +177,7 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 			m.opts.SetMode(m.id.Key, m.mode)
 		}
 		return nil
-	case "?", "/":
+	case "?":
 		m.help = !m.help
 		return nil
 	case "i":
@@ -185,20 +186,20 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 	case "tab":
 		m.playersUntil = time.Now().Add(playerPanelTTL)
 		return tea.Tick(playerPanelTTL, func(time.Time) tea.Msg { return hidePlayersMsg{} })
-	case "-", "_", "left":
+	case "-":
 		// 主键是 -/=：不少输入法用这两个翻页，手指不用离开主键区
 		if m.page > 0 {
 			m.page--
 		}
 		return nil
-	case "=", "+", "right":
+	case "=":
 		if _, pages := m.compactPage(); m.page < pages-1 {
 			m.page++
 		}
 		return nil
 	}
 
-	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+	if m.tableActionKey(key) == cardAction.ID {
 		m.playIndex(int(key[0] - '1'))
 		return nil
 	}
@@ -208,7 +209,7 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 
 // handleSharedKey 是两种模式共用的动作：喊 UNO、摸牌、过牌、抓包、聊天、投票。
 func (m *Model) handleSharedKey(key string) tea.Cmd {
-	switch key {
+	switch m.tableActionKey(key) {
 	case "u":
 		m.act(engine.CallUno{Seat: m.snap.MySeat})
 	case "d":
@@ -283,25 +284,25 @@ func (m *Model) viewCompactEnter() string {
 	return line + "\n" + cmd
 }
 
-// viewCompactChat 把快捷语压成两行。
+// viewCompactChat 保留全部快捷语，并在窄屏按完整选项折行。
 func (m *Model) viewCompactChat() string {
 	items := make([]string, 0, len(client.Presets))
-	for i, p := range client.Presets {
-		items = append(items, fmt.Sprintf("%d.%s", i+1, shortName(p, 12)))
+	for _, action := range ui.NumberedActions(client.Presets) {
+		items = append(items, action.Key+"."+shortName(action.Label, 12))
 	}
-	body := "[CHAT] " + strings.Join(items, " ")
-	for lipgloss.Width(body) > m.width && len(items) > 1 {
-		items = items[:len(items)-1]
-		body = "[CHAT] " + strings.Join(items, " ")
-	}
-	return m.plain().Render(body)
+	items = append(items, ui.EscapeAction("取消").Token())
+	return strings.Join(ui.WrapTokens(items, m.plain().Render("[CHAT] 快捷语 "), m.width), "\n")
 }
 
 // viewCompactSetup 是首次登录的一次性选择：问完记住，以后不再弹。
 func (m *Model) viewCompactSetup() string {
 	line := m.turn().Render("[SETUP] 第一次来，选个界面：") +
-		m.plain().Render(" [1]丰富（信息全）  [2]极简（摸鱼用）")
-	hint := m.dim().Render("[CMD] 选完会记住，之后按 I 随时切换")
+		" " + strings.Join(ui.RenderActions(layoutChoiceActions, m.plain().Render, m.turn().Render), "  ")
+	hint := "[CMD] 选完会记住，之后可切换界面"
+	for _, action := range ui.SelectActions(commonActions, "i") {
+		hint = "[CMD] 选完会记住，之后按 " + action.Key + " 随时切换"
+	}
+	hint = m.dim().Render(hint)
 	return line + "\n" + hint
 }
 
@@ -338,7 +339,7 @@ func (m *Model) viewCompactLobby() string {
 	if m.chat {
 		lines = append(lines, m.viewCompactChat())
 	}
-	lines = append(lines, m.dim().Render(m.compactLobbyCmd()))
+	lines = append(lines, m.compactLobbyCmd())
 
 	return strings.Join(lines, "\n")
 }
@@ -381,20 +382,9 @@ func (m *Model) compactLobbyPlayers() []string {
 
 // compactLobbyCmd 只列真的能按的键：房间设置、减电脑这些后端还没有的能力先不画。
 func (m *Model) compactLobbyCmd() string {
-	items := []string{}
-	if m.snap.IsHost {
-		items = append(items, "[S]开始", "[C]+电脑")
-	} else {
-		items = append(items, "等房主开始")
-	}
-	items = append(items, "[T]聊天", "[V]投票", "[Esc]离开", "[I]界面")
-
-	body := "[CMD] " + strings.Join(items, " ")
-	for lipgloss.Width(body) > m.width && len(items) > 1 {
-		items = items[:len(items)-1]
-		body = "[CMD] " + strings.Join(items, " ")
-	}
-	return m.dim().Render(body)
+	items := ui.RenderActions(m.currentLobbyActions(), m.dim().Render, m.turn().Render)
+	prefix := m.dim().Render("[CMD] ")
+	return strings.Join(ui.WrapTokens(items, prefix, m.width), "\n")
 }
 
 // viewCompact 画 4~5 行：回合、桌面、手牌、消息、按键。
@@ -498,7 +488,7 @@ func (m *Model) turnMarquee(obs engine.Observation, width int) string {
 	start := (obs.Turn-1)*slot + m.turnOffset
 	start = ((start % tapeW) + tapeW) % tapeW
 
-	window := ansi.Cut(m.tape+m.tape, start, start+winW)
+	window := ui.CyclicWindow(m.tape, start, winW)
 	return ui.PadRight(ansi.Truncate(window, winW, ""), width)
 }
 
@@ -645,22 +635,7 @@ func (m *Model) compactPlayers(obs engine.Observation) []string {
 		names = append(names, badge+")")
 	}
 
-	var out []string
-	for i := 0; i < len(names); i += 3 {
-		end := i + 3
-		if end > len(names) {
-			end = len(names)
-		}
-		prefix := "         "
-		if i == 0 {
-			prefix = m.dim().Render("[PLAYER] ")
-		}
-		out = append(out, prefix+strings.Join(names[i:end], " "))
-	}
-	if len(out) == 0 {
-		out = append(out, m.dim().Render("[PLAYER] (还没有玩家)"))
-	}
-	return out
+	return ui.PlayerRows(names, m.width, 3, m.dim().Render("[PLAYER] "))
 }
 
 // compactFeed 是"最近一条公开消息"那一行：聊天、战报、系统提示共用。
@@ -704,26 +679,19 @@ func (m *Model) compactFeed() string {
 func (m *Model) compactCmd(obs engine.Observation) string {
 	// 质疑是限时决定，必须独占这一行
 	if obs.Challenge != nil && obs.Challenge.By == m.snap.MySeat {
-		return m.warn().Render("[CMD] 对方打出 +4： [Y]认罚摸4  [N]质疑（他还有同色牌就算耍赖）")
+		actions := append([]ui.Action{{Label: "对方打出 +4："}}, challengeActions...)
+		actions = append(actions, ui.Action{Label: "（他还有同色牌就算耍赖）"})
+		return strings.Join(ui.WrapTokens(ui.RenderActions(actions, m.warn().Render, m.turn().Render), m.warn().Render("[CMD] "), m.width), "\n")
 	}
 	if m.choosing {
-		return m.warn().Render("[CMD] 选颜色 [1]红 [2]黄 [3]蓝 [4]绿  (Esc 取消)")
+		actions := append([]ui.Action{{Label: "选颜色"}}, colorActions...)
+		return strings.Join(ui.WrapTokens(ui.RenderActions(actions, m.warn().Render, m.turn().Render), m.warn().Render("[CMD] "), m.width), "\n")
 	}
 
-	items := []string{"[?]帮助", "[1-5]出牌", "[U]UNO", "[D]摸牌", "[P]过", "[C]抓包", "[T]聊天", "[Tab]玩家", "[-=]翻页", "[I]界面"}
-	if obs.DrawnID >= 0 {
-		items = append(items, "[P]过牌")
-	}
-	if m.snap.Vote != nil {
-		items = append(items, "[V]重开投票")
-	}
-	body := "[CMD] " + strings.Join(items, " ")
-	// 超宽就整项丢掉，不要把一个命令切成两半
-	for lipgloss.Width(body) > m.width && len(items) > 1 {
-		items = items[:len(items)-1]
-		body = "[CMD] " + strings.Join(items, " ")
-	}
-	return m.dim().Render(body)
+	actions := m.tableActions()
+	items := ui.RenderActions(actions, m.dim().Render, m.turn().Render)
+	prefix := m.dim().Render("[CMD] ")
+	return strings.Join(ui.WrapTokens(items, prefix, m.width), "\n")
 }
 
 // shortName 按显示宽度截断名字，避免长名字把整行撑爆。
