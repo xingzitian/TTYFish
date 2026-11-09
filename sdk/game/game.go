@@ -25,6 +25,12 @@ type PlayerSeed struct {
 	Bot  bool
 }
 
+// DLCGame optionally exposes room-scoped content selected before a match.
+type DLCGame interface {
+	DLCs() []string
+	NewMatchWithDLC(players []PlayerSeed, seed int64, enabled []string) any
+}
+
 // Event 是一条给时间线用的战报。
 //
 // Detail 是给游戏自己的 UI 用的任意值（UNO 用它传牌面），平台只负责

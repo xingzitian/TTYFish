@@ -58,11 +58,15 @@ type Model struct {
 	width    int
 	height   int
 
-	errMsg string
-	errAt  time.Time
-	closed bool
-	boss   bool
-	help   bool
+	errMsg      string
+	errAt       time.Time
+	closed      bool
+	boss        bool
+	help        bool
+	helpOffset  int
+	frameOffset int
+	frameLast   int
+	frameScope  string
 
 	page     int
 	step     step
@@ -152,6 +156,13 @@ func (m *Model) Close() {}
 
 // HasModal 告诉网关：现在有选择占着键盘，Esc 先归游戏处理。
 func (m *Model) HasModal() bool { return m.boss || m.help || m.showPlayers() || m.step != stepIdle }
+
+func (m *Model) DisconnectAction() ui.Action {
+	for _, action := range ui.SelectActions(commonActions, "quit") {
+		return action
+	}
+	return ui.Action{}
+}
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := m.update(msg)
@@ -359,15 +370,52 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		switch action {
 		case "close-help", "cancel":
 			m.help = false
+			m.helpOffset = 0
 		case "quit":
 			return tea.Quit
+		case "help-up", "help-down", "help-page-up", "help-page-down":
+			_, last := ui.HelpViewport(m.helpContent(), m.width, m.height, m.helpOffset)
+			m.helpOffset = ui.MoveHelpOffset(action, m.helpOffset, last, m.height)
 		}
 		return nil
+	}
+	if m.frameLast > 0 {
+		if action, ok := ui.ResolveAction(ui.FrameScrollActions(), key); ok {
+			m.frameOffset = ui.MoveFrameOffset(action, m.frameOffset, m.frameLast, m.height)
+			return nil
+		}
 	}
 	if action, _ := ui.ResolveAction([]ui.Action{ui.InterruptAction()}, key); action == "interrupt" {
 		return tea.Quit
 	}
 	cancel, _ := ui.ResolveAction([]ui.Action{ui.EscapeAction("")}, key)
+	if actions, _ := m.commandActions(); ui.ActionScopeInvalid(actions) {
+		if cancel == "cancel" && m.step != stepIdle {
+			m.reset()
+			m.say()
+		}
+		return nil
+	}
+	if m.step == stepChat {
+		if cancel == "cancel" {
+			m.reset()
+			m.say()
+			return nil
+		}
+		if action, _ := ui.ResolveAction(ui.SelectActions(commonActions, "quit"), key); action == "quit" {
+			return tea.Quit
+		}
+		id, ok := ui.ResolveAction(chatActions(), key)
+		if idx, err := strconv.Atoi(id); ok && err == nil && m.c != nil {
+			if err := m.c.Chat(idx); err != nil {
+				m.fail(err.Error())
+			} else {
+				m.say()
+				m.reset()
+			}
+		}
+		return nil
+	}
 	if m.showPlayers() && cancel == "cancel" {
 		m.playersAt = time.Time{}
 		return nil
@@ -401,6 +449,7 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	switch commonAction {
 	case "help":
 		m.help = true
+		m.helpOffset = 0
 		return nil
 	case "layout":
 		m.toggleLayout()
@@ -436,18 +485,6 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	}
 
 	o := m.obs()
-	if m.step == stepChat {
-		id, ok := ui.ResolveAction(chatActions(), key)
-		if idx, err := strconv.Atoi(id); ok && err == nil && m.c != nil {
-			if err := m.c.Chat(idx); err != nil {
-				m.fail(err.Error())
-			} else {
-				m.say()
-				m.reset()
-			}
-		}
-		return nil
-	}
 	if commonAction == "chat" && (!m.inGame() || m.alive()) {
 		m.step = stepChat
 		return nil
@@ -504,8 +541,9 @@ func (m *Model) handlePlaying(key string) tea.Cmd {
 	actions, _ := m.commandActions()
 	action, _ := ui.ResolveAction(actions, key)
 	if action == cardAction.ID {
-		idx, _ := digit(key)
-		m.pickCard(idx)
+		if idx, ok := ui.ResolveIndexedAction(cardAction, key); ok {
+			m.pickCard(idx)
+		}
 		return nil
 	}
 	switch action {
@@ -658,7 +696,10 @@ func (m *Model) handleGiving(key string) tea.Cmd {
 	}
 	actions, _ := m.commandActions()
 	if action, _ := ui.ResolveAction(actions, key); action == cardAction.ID {
-		idx, _ := digit(key)
+		idx, ok := ui.ResolveIndexedAction(cardAction, key)
+		if !ok {
+			return nil
+		}
 		page, _ := m.pageCards()
 		if idx >= len(page) {
 			return nil
@@ -718,6 +759,21 @@ func (m *Model) useDefuse(o engine.Observation, position int) {
 func (m *Model) lobbyKey(key string) {
 	action, _ := ui.ResolveAction(lobbyActions, key)
 	switch action {
+	case "dlc":
+		if !m.snap.IsHost {
+			m.fail("只有房主能设置 DLC")
+			return
+		}
+		setter, ok := m.c.(client.DLCToggler)
+		if !ok {
+			m.fail("当前连接不支持 DLC 设置")
+			return
+		}
+		if err := setter.ToggleDLC("reverse"); err != nil {
+			m.fail(err.Error())
+		} else {
+			m.say()
+		}
 	case "s":
 		if !m.snap.IsHost || m.c == nil {
 			m.fail("只有房主能开局，等房主按 S")

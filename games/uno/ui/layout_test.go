@@ -133,7 +133,7 @@ func TestUltraWideIsCapped(t *testing.T) {
 	}
 }
 
-// TestTooSmallTerminal 低于下限时明确拒绝，而不是画出一个残缺的界面。
+// TestTooSmallTerminal 低于原布局下限时仍可滚动查看牌桌。
 func TestTooSmallTerminal(t *testing.T) {
 	for _, tc := range []struct{ w, h int }{
 		{39, 24},
@@ -142,17 +142,22 @@ func TestTooSmallTerminal(t *testing.T) {
 	} {
 		m := testModel(t, tc.w, sampleSnap(1))
 		m.height = tc.h
-		out := strip(m.View())
-		if !strings.Contains(out, "终端太小") {
-			t.Fatalf("%d×%d 应该提示终端太小:\n%s", tc.w, tc.h, out)
-		}
-		if !strings.Contains(out, "至少要 40×10") {
-			t.Fatalf("%d×%d 的提示里应该写明下限:\n%s", tc.w, tc.h, out)
-		}
-		for i, line := range strings.Split(out, "\n") {
-			if lipgloss.Width(line) > tc.w {
-				t.Errorf("%d×%d 第 %d 行超宽（%q）", tc.w, tc.h, i+1, line)
+		var seen strings.Builder
+		for offset := 0; ; offset++ {
+			m.frameOffset = offset
+			out := strip(m.View())
+			seen.WriteString(out)
+			for i, line := range strings.Split(out, "\n") {
+				if lipgloss.Width(line) > tc.w {
+					t.Errorf("%d×%d 第 %d 行超宽（%q）", tc.w, tc.h, i+1, line)
+				}
 			}
+			if offset >= m.frameLast {
+				break
+			}
+		}
+		if !strings.Contains(seen.String(), "你的手牌") || !strings.Contains(seen.String(), "[D]摸牌") {
+			t.Fatalf("%d×%d 看不到手牌或操作:\n%s", tc.w, tc.h, seen.String())
 		}
 	}
 }

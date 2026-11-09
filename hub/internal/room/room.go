@@ -125,6 +125,7 @@ type Room struct {
 	opts               Options
 	phase              Phase
 	state              any
+	dlc                []string
 	matchID            string
 	settled            bool
 	settlementPending  bool
@@ -147,6 +148,68 @@ type Room struct {
 	closed             bool
 	revision           uint64
 	stop               chan struct{}
+}
+
+// SetDLC changes a supported option for the next match under the room lock.
+func (r *Room) SetDLC(fp, id string, enabled bool) error {
+	return r.updateDLC(fp, id, enabled, false)
+}
+
+func (r *Room) ToggleDLC(fp, id string) error {
+	return r.updateDLC(fp, id, false, true)
+}
+
+func (r *Room) updateDLC(fp, id string, enabled, toggle bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.byFP[fp]
+	if !ok {
+		return ErrNotIn
+	}
+	if !s.host {
+		return ErrNotHost
+	}
+	if r.phase != Lobby && r.phase != Over {
+		return ErrPhase
+	}
+	if r.phase == Over && r.state != nil && r.Game.Phase(r.state) == game.RoundOver && r.Game.MatchTarget() > 0 {
+		return ErrPhase
+	}
+	g, ok := r.Game.(game.DLCGame)
+	if !ok {
+		return fmt.Errorf("该游戏不支持 DLC")
+	}
+	valid := false
+	for _, candidate := range g.DLCs() {
+		if candidate == id {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return fmt.Errorf("未知 DLC: %s", id)
+	}
+	if toggle {
+		enabled = true
+		for _, current := range r.dlc {
+			if current == id {
+				enabled = false
+				break
+			}
+		}
+	}
+	selected := make([]string, 0, len(r.dlc)+1)
+	for _, current := range r.dlc {
+		if current != id {
+			selected = append(selected, current)
+		}
+	}
+	if enabled {
+		selected = append(selected, id)
+	}
+	r.dlc = selected
+	r.broadcastLocked()
+	return nil
 }
 
 // New 建一间空房。
@@ -344,7 +407,11 @@ func (r *Room) startLocked() {
 	for _, s := range r.seats {
 		seeds = append(seeds, game.PlayerSeed{Seat: s.seat, Name: s.name, Bot: s.bot})
 	}
-	r.state = r.Game.NewMatch(seeds, seed)
+	if g, ok := r.Game.(game.DLCGame); ok && len(r.dlc) > 0 {
+		r.state = g.NewMatchWithDLC(seeds, seed, append([]string(nil), r.dlc...))
+	} else {
+		r.state = r.Game.NewMatch(seeds, seed)
+	}
 	r.matchID = rand.Text()
 	r.settled = false
 	r.settlementPending = false
@@ -911,6 +978,7 @@ func (r *Room) Abandoned(ttl time.Duration) bool {
 
 func (r *Room) snapshotLocked(s *seat) Snapshot {
 	snap := Snapshot{
+		DLC:                append([]string(nil), r.dlc...),
 		Revision:           r.revision,
 		SettlementRevision: r.settlementRevision,
 		Code:               r.Code,

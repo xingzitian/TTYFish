@@ -52,6 +52,7 @@ type wireSnapshot struct {
 	MySeat             int                    `json:"my_seat"`
 	MaxSeats           int                    `json:"max_seats"`
 	IsHost             bool                   `json:"is_host"`
+	DLC                []string               `json:"dlc"`
 	View               json.RawMessage        `json:"view"`
 	Timeline           []client.TimelineEntry `json:"timeline"`
 	Vote               *client.Vote           `json:"vote"`
@@ -117,6 +118,22 @@ func (c *Client) Leave() error {
 
 func (c *Client) Start() error {
 	_, err := c.doRoomAction("POST", "/api/v1/rooms/"+c.mustCode()+"/start", nil)
+	return err
+}
+
+func (c *Client) SetDLC(id string, enabled bool) error {
+	snap, err := c.doRoomAction("POST", "/api/v1/rooms/"+c.mustCode()+"/dlc", map[string]any{"id": id, "enabled": enabled})
+	if err == nil {
+		c.apply(snap)
+	}
+	return err
+}
+
+func (c *Client) ToggleDLC(id string) error {
+	snap, err := c.doRoomAction("POST", "/api/v1/rooms/"+c.mustCode()+"/dlc/toggle", map[string]any{"id": id})
+	if err == nil {
+		c.apply(snap)
+	}
 	return err
 }
 
@@ -343,6 +360,7 @@ func (c *Client) apply(w wireSnapshot) {
 	c.gameID = w.GameID
 
 	snap := client.Snapshot{
+		DLC:                append([]string(nil), w.DLC...),
 		Revision:           w.Revision,
 		SettlementRevision: w.SettlementRevision,
 		Code:               w.Code,

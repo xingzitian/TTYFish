@@ -38,8 +38,11 @@ func (m *Model) updateTurnOffset(previous client.Snapshot) {
 		m.turnOffset, m.slideSeats = 0, 0
 		return
 	}
-	// Draw order is always forward, including the wrap from last to first.
-	m.slideSeats = -((next - prev + len(seats)) % len(seats))
+	if o.Direction == -1 {
+		m.slideSeats = (prev - next + len(seats)) % len(seats)
+	} else {
+		m.slideSeats = -((next - prev + len(seats)) % len(seats))
+	}
 	m.turnOffset = 0
 }
 
@@ -78,12 +81,16 @@ func (m *Model) turnMarquee(width int) string {
 		m.turnOffset = m.slideSeats * stride
 		m.slideSeats = 0
 	}
+	separator := " >>> "
+	if m.obs().Direction == -1 {
+		separator = " <<< "
+	}
 	var tape strings.Builder
 	for _, seat := range seats {
 		badge := m.turnBadge(seat, slot)
 		pad := max(0, (slot-lipglossWidth(badge))/2)
 		tape.WriteString(ui.PadRight(strings.Repeat(" ", pad)+badge, slot))
-		tape.WriteString(" >>> ")
+		tape.WriteString(separator)
 	}
 	tapeW := stride * len(seats)
 	start := ((current-1)*stride + m.turnOffset) % tapeW

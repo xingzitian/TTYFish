@@ -7,6 +7,72 @@ import (
 	"testing"
 )
 
+func TestReverseDLCDeckAndTurnRules(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		s, err := NewGameWithReverse(3, 42, enabled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, card := range s.Deck {
+			if card.Kind == Reverse {
+				count++
+			}
+		}
+		for _, hand := range s.Hands {
+			for _, card := range hand {
+				if card.Kind == Reverse {
+					count++
+				}
+			}
+		}
+		want := 0
+		if enabled {
+			want = 4
+		}
+		if count != want || s.Direction != 1 {
+			t.Fatalf("enabled=%t count=%d direction=%d", enabled, count, s.Direction)
+		}
+	}
+	for _, tc := range []struct {
+		name                            string
+		seats, debt, wantTurn, wantDebt int
+	}{
+		{"normal", 3, 1, 2, 1}, {"attack debt", 3, 2, 0, 1}, {"two players", 2, 1, 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hands := make([][]Kind, tc.seats)
+			hands[0] = []Kind{Reverse}
+			s := testGame(hands...)
+			s.TurnsRemaining = tc.debt
+			s.UnderAttack = tc.debt > 1
+			deck := append([]Card(nil), s.Deck...)
+			play(t, s, 0, []int{s.Hands[0][0].ID}, -1, "")
+			settle(t, s)
+			if s.Direction != -1 || s.Turn != tc.wantTurn || s.TurnsRemaining != tc.wantDebt || !reflect.DeepEqual(deck, s.Deck) {
+				t.Fatalf("bad reverse: %+v", s)
+			}
+		})
+	}
+}
+
+func TestReverseNopeAndEliminatedSeats(t *testing.T) {
+	s := testGame([]Kind{Reverse}, []Kind{Nope}, []Kind{TacoCat}, []Kind{TacoCat})
+	s.Alive[3] = false
+	play(t, s, 0, []int{s.Hands[0][0].ID}, -1, "")
+	mustApply(t, s, Action{Type: PlayNope, Seat: 1, CardIDs: []int{s.Hands[1][0].ID}})
+	settle(t, s)
+	if s.Direction == -1 || s.Turn != 0 || s.TurnsRemaining != 1 {
+		t.Fatal("negated reverse changed turn")
+	}
+	s.Hands[0] = []Card{{ID: 999, Kind: Reverse}}
+	play(t, s, 0, []int{999}, -1, "")
+	settle(t, s)
+	if s.Direction != -1 || s.Turn != 2 {
+		t.Fatalf("did not skip eliminated seat: %+v", s)
+	}
+}
+
 func testGame(hands ...[]Kind) *State {
 	s := &State{
 		Hands: make([][]Card, len(hands)), Alive: make([]bool, len(hands)),

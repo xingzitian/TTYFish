@@ -10,12 +10,52 @@ import (
 	"testing"
 	"time"
 
+	kittens "github.com/xingzitian/TTYFish/games/explodingkittens"
+	kitprotocol "github.com/xingzitian/TTYFish/games/explodingkittens/protocol"
 	"github.com/xingzitian/TTYFish/games/uno"
 	"github.com/xingzitian/TTYFish/games/uno/engine"
 	"github.com/xingzitian/TTYFish/games/uno/protocol"
 	"github.com/xingzitian/TTYFish/hub/internal/play"
 	"github.com/xingzitian/TTYFish/hub/internal/room"
 )
+
+func TestKittensDLCRoomAPI(t *testing.T) {
+	games, err := play.New([]play.Game{{ID: kittens.ID, Rules: kittens.Game{}, Codec: kitprotocol.Codec{}}}, room.Options{NoLoop: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer games.Close()
+	f := setup(t, Config{Games: games})
+	alice, bob := loginPlayer(t, f, "alice"), loginPlayer(t, f, "bob")
+	created := read[play.Snapshot](t, f.request("POST", "/api/v1/rooms", alice, map[string]string{"game_id": kittens.ID}, 201))
+	base := "/api/v1/rooms/" + created.Code
+	f.request("POST", base+"/join", bob, nil, 200)
+	toggle := map[string]string{"id": kittens.ReverseDLC}
+	f.request("POST", base+"/dlc/toggle", bob, toggle, 403)
+	one := read[play.Snapshot](t, f.request("POST", base+"/dlc/toggle", alice, toggle, 200))
+	two := read[play.Snapshot](t, f.request("POST", base+"/dlc/toggle", alice, toggle, 200))
+	if len(one.DLC) != 1 || len(two.DLC) != 0 {
+		t.Fatalf("two toggles: first=%v second=%v", one.DLC, two.DLC)
+	}
+	body := map[string]any{"id": kittens.ReverseDLC, "enabled": true}
+	f.request("POST", base+"/dlc", bob, body, 403)
+	f.request("POST", base+"/dlc", alice, map[string]any{"id": kittens.ReverseDLC}, 400)
+	updated := read[play.Snapshot](t, f.request("POST", base+"/dlc", alice, body, 200))
+	if len(updated.DLC) != 1 || updated.DLC[0] != kittens.ReverseDLC {
+		t.Fatalf("missing DLC: %+v", updated.DLC)
+	}
+	joined := read[play.Snapshot](t, f.request("GET", base, bob, nil, 200))
+	if len(joined.DLC) != 1 || joined.DLC[0] != kittens.ReverseDLC {
+		t.Fatal("other player cannot see DLC")
+	}
+	f.request("POST", base+"/start", alice, nil, 200)
+	f.request("POST", base+"/dlc", alice, body, 409)
+	f.request("POST", base+"/dlc/toggle", alice, toggle, 409)
+	reconnected := read[play.Snapshot](t, f.request("GET", "/api/v1/me/room", bob, nil, 200))
+	if len(reconnected.DLC) != 1 || reconnected.DLC[0] != kittens.ReverseDLC {
+		t.Fatal("DLC missing on reconnect")
+	}
+}
 
 func gameFixture(t *testing.T) fixture {
 	t.Helper()

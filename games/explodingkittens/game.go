@@ -10,6 +10,7 @@ import (
 )
 
 const ID = "exploding-kittens"
+const ReverseDLC = "reverse"
 
 type Game struct{}
 
@@ -19,7 +20,19 @@ func (Game) MaxSeats() int    { return 5 }
 func (Game) MatchTarget() int { return 0 }
 
 func (Game) NewMatch(players []game.PlayerSeed, seed int64) any {
-	s, err := engine.NewGame(len(players), seed)
+	return Game{}.NewMatchWithDLC(players, seed, nil)
+}
+
+func (Game) DLCs() []string { return []string{ReverseDLC} }
+
+func (Game) NewMatchWithDLC(players []game.PlayerSeed, seed int64, enabled []string) any {
+	reverse := false
+	for _, id := range enabled {
+		if id == ReverseDLC {
+			reverse = true
+		}
+	}
+	s, err := engine.NewGameWithReverse(len(players), seed, reverse)
 	if err != nil {
 		panic(err) // The room validates MinSeats/MaxSeats before creating a match.
 	}
@@ -175,7 +188,7 @@ func (g Game) Bot(view any) any {
 	}
 	// Use only the bot's own filtered view, never the authoritative deck.
 	if o.Phase == engine.Playing && o.Seat == o.Turn {
-		for _, kind := range []engine.Kind{engine.Attack, engine.Skip} {
+		for _, kind := range []engine.Kind{engine.Attack, engine.Skip, engine.Reverse} {
 			if len(o.Future) > 0 && o.Future[0].Kind == engine.ExplodingKitten {
 				for _, card := range o.Hand {
 					if card.Kind == kind {

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/xingzitian/TTYFish/games/uno/engine"
@@ -168,5 +169,39 @@ func TestChatModalFitsBothLayoutsAndLobby(t *testing.T) {
 				t.Fatalf("wrong modal controls:\n%s", view)
 			}
 		}
+	}
+}
+
+func TestCompactChatCanScrollInVeryShortTerminal(t *testing.T) {
+	m, rec := playingState(true).model()
+	m.width, m.height, m.chat = 40, 2, true
+	var seen strings.Builder
+	for i := 0; i < 30; i++ {
+		seen.WriteString(strip(m.View()))
+		m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	}
+	for _, text := range client.Presets {
+		if !strings.Contains(seen.String(), text) {
+			t.Fatalf("chat option %q unreachable", text)
+		}
+	}
+	if !m.chat || len(rec.calls) != 0 {
+		t.Fatal("scrolling triggered a chat or closed its modal")
+	}
+}
+
+func TestChatStartsAtTopAfterScrollingTable(t *testing.T) {
+	m, _ := playingState(true).model()
+	m.width, m.height = 40, 2
+	m.View()
+	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	m.View()
+	if m.frameOffset == 0 {
+		t.Fatal("table did not scroll")
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+	view := strip(m.View())
+	if m.frameOffset != 0 || !strings.Contains(view, "快捷语") {
+		t.Fatalf("chat did not start at top: %q offset=%d", view, m.frameOffset)
 	}
 }

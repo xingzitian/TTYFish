@@ -38,9 +38,13 @@ func (m *Model) compactTurn(width int) string {
 			alive++
 		}
 	}
-	tail := fmt.Sprintf(" | 需摸:%d 存活:%d/%d", o.TurnsRemaining, alive, seats)
+	direction := "→"
+	if o.Direction == -1 {
+		direction = "←"
+	}
+	tail := fmt.Sprintf(" | %s 需摸:%d 存活:%d/%d", direction, o.TurnsRemaining, alive, seats)
 	if width-lipglossWidth("[TURN] "+tail) < 37 {
-		tail = fmt.Sprintf(" | 需摸:%d", o.TurnsRemaining)
+		tail = fmt.Sprintf(" | %s 需摸:%d", direction, o.TurnsRemaining)
 	}
 	if width-lipglossWidth("[TURN] "+tail) < 9 {
 		tail = ""
@@ -102,8 +106,13 @@ func (m *Model) compactHand(width int) []string {
 }
 
 // viewHelp 是键位一览：按当前阶段只列能用的键。
-func (m *Model) viewHelp() string {
+func (m *Model) helpContent() string {
 	return ui.RenderHelp(m.keyHelp(), m.width, "[KEY] 键位一览", ui.HelpCloseHint(ui.HelpActions(commonActions, "help", "quit")), m.dim().Render, m.turn().Render)
+}
+
+func (m *Model) viewHelp() string {
+	view, _ := ui.HelpViewport(m.helpContent(), m.width, m.height, m.helpOffset)
+	return view
 }
 
 func (m *Model) keyHelp() []ui.ActionGroup {

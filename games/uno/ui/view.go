@@ -176,10 +176,7 @@ func (m *Model) panelBorder() lipgloss.Style {
 	return m.renderer.NewStyle().BorderForeground(lipgloss.Color("238"))
 }
 
-// 终端尺寸下限。低于这个值不再硬画——挤出来的界面比不画更糟。
-//
-// 40 列：紧凑提示行就要 36 格，再窄连"u 喊UNO"都摆不下；
-// 10 行：轮到你 + 牌桌 + 手牌头 + 至少两行手牌 + 提示，再少必然截断。
+// 原丰富布局的尺寸阈值；更小的窗口使用单栏并通过视窗滚动。
 const (
 	minWidth  = 40
 	minHeight = 10
@@ -187,12 +184,6 @@ const (
 
 func (m *Model) tooSmall() bool {
 	return m.width < minWidth || m.height < minHeight
-}
-
-func (m *Model) viewTooSmall() string {
-	return m.warn().Render("终端太小") + "\n" +
-		m.dim().Render(fmt.Sprintf("当前 %d×%d，至少要 %d×%d", m.width, m.height, minWidth, minHeight)) + "\n" +
-		m.dim().Render("把窗口拉大一点就行")
 }
 
 // viewBoss 是老板键的假象：一行 shell 提示符 + 几条滚动日志。
@@ -227,7 +218,19 @@ func (m *Model) viewBoss() string {
 // 自己折行/滚动，顶上那几行被顶歪——表现就是"消息一长，界面就乱了"。
 // 这一层兜住所有情况（长错误、长昵称、长聊天、窄终端），不用每个地方各自小心。
 func (m *Model) View() string {
-	return ui.ClampFrame(m.render(), m.width, m.height)
+	scope := fmt.Sprintf("%t/%t/%t/%t/%t/%t/%t/%t/%d/%t", m.boss, m.help, m.needLayoutChoice, m.entering, m.closed, m.chat, m.choosing, m.minimal, m.snap.Phase, m.pendingChallenge() != nil)
+	if scope != m.frameScope {
+		m.frameOffset, m.frameLast, m.frameScope = 0, 0, scope
+	}
+	content := m.render()
+	if m.help || m.boss {
+		m.frameOffset, m.frameLast = 0, 0
+		return ui.ClampFrame(content, m.width, m.height)
+	}
+	view, last := ui.FrameViewport(content, m.width, m.height, m.frameOffset)
+	m.frameLast = last
+	m.frameOffset = min(m.frameOffset, last)
+	return view
 }
 
 // clampFrame 把整帧裁进终端尺寸。按显示宽度裁，ANSI 颜色码不会被切断。
@@ -278,7 +281,7 @@ func (m *Model) render() string {
 	}
 
 	if m.tooSmall() {
-		return m.viewTooSmall()
+		return m.viewTable(true, playersHorizontal)
 	}
 
 	// 布局按"宽度够不够"和"高度够不够"分四种，而不是一个固定阈值。
@@ -487,7 +490,7 @@ func (m *Model) viewTable(withLog bool, players playerLayout) string {
 	// On a short single-column terminal, reserve room for the actionable keys.
 	// The ordinary opponent list and spacer can otherwise push them below the
 	// frame even though the command component itself wrapped correctly.
-	if withLog && players == playersHorizontal && !m.chat {
+	if withLog && players == playersHorizontal && !m.chat && !m.tooSmall() {
 		hand := m.viewHand()
 		if m.choosing {
 			hand = m.viewColorMenu()

@@ -11,6 +11,15 @@ import (
 )
 
 var _ game.Game = Game{}
+var _ game.DLCGame = Game{}
+
+func TestBotUsesReverseAgainstKnownBomb(t *testing.T) {
+	o := engine.Observation{Seat: 0, Turn: 0, Phase: engine.Playing, Alive: []bool{true, true}, Hand: []engine.Card{{ID: 42, Kind: engine.Reverse}}, Future: []engine.Card{{Kind: engine.ExplodingKitten}}}
+	a, ok := (Game{}).Bot(o).(engine.Action)
+	if !ok || a.Type != engine.Play || len(a.CardIDs) != 1 || a.CardIDs[0] != 42 {
+		t.Fatalf("bot action: %+v", a)
+	}
+}
 
 func responseState(t *testing.T) *engine.State {
 	t.Helper()

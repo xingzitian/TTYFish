@@ -21,10 +21,67 @@ func (s *Server) registerRoomRoutes() {
 	s.mux.HandleFunc("POST /api/v1/rooms/{code}/leave", s.leaveRoom)
 	s.mux.HandleFunc("POST /api/v1/rooms/{code}/start", s.roomCommand("start"))
 	s.mux.HandleFunc("POST /api/v1/rooms/{code}/bots", s.roomCommand("bot"))
+	s.mux.HandleFunc("POST /api/v1/rooms/{code}/dlc", s.roomDLC)
+	s.mux.HandleFunc("POST /api/v1/rooms/{code}/dlc/toggle", s.roomDLCToggle)
 	s.mux.HandleFunc("POST /api/v1/rooms/{code}/chat", s.roomCommand("chat"))
 	s.mux.HandleFunc("POST /api/v1/rooms/{code}/restart-votes", s.roomCommand("restart"))
 	s.mux.HandleFunc("POST /api/v1/rooms/{code}/actions", s.roomAction)
 	s.mux.HandleFunc("GET /api/v1/rooms/{code}/events", s.roomEvents)
+}
+
+func (s *Server) roomDLCToggle(w http.ResponseWriter, r *http.Request) {
+	a, ok := s.current(w, r)
+	if !ok {
+		return
+	}
+	g := s.gameService(w)
+	if g == nil {
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.ID == "" {
+		failure(w, 400, "invalid_room_request", "需要 id")
+		return
+	}
+	snap, err := g.ToggleDLC(a.ID, r.PathValue("code"), body.ID)
+	if err != nil {
+		report(w, err)
+		return
+	}
+	respond(w, 200, snap)
+}
+
+func (s *Server) roomDLC(w http.ResponseWriter, r *http.Request) {
+	a, ok := s.current(w, r)
+	if !ok {
+		return
+	}
+	g := s.gameService(w)
+	if g == nil {
+		return
+	}
+	var body struct {
+		ID      string `json:"id"`
+		Enabled *bool  `json:"enabled"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.ID == "" || body.Enabled == nil {
+		failure(w, 400, "invalid_room_request", "需要 id 和 enabled")
+		return
+	}
+	snap, err := g.SetDLC(a.ID, r.PathValue("code"), body.ID, *body.Enabled)
+	if err != nil {
+		report(w, err)
+		return
+	}
+	respond(w, 200, snap)
 }
 func (s *Server) gameService(w http.ResponseWriter) *play.Service {
 	if s.cfg.Games == nil {

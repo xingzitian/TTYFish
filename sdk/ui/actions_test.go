@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -75,6 +76,20 @@ func TestWrapTokensPreservesFirstActionWhenPrefixIsWide(t *testing.T) {
 	}
 }
 
+func TestWrapTokensPreservesLongChineseAction(t *testing.T) {
+	token := "[X]这是一个特别长的中文操作说明需要完整显示"
+	rows := WrapTokens([]string{token}, "[CMD] ", 12)
+	joined := strings.Join(rows, "")
+	if !strings.Contains(joined, token) {
+		t.Fatalf("long action lost content: %q", joined)
+	}
+	for _, row := range rows {
+		if lipgloss.Width(row) > 12 {
+			t.Fatalf("row too wide: %q", row)
+		}
+	}
+}
+
 func TestRenderActionsDoesNotInterpretLabelBrackets(t *testing.T) {
 	normal := func(s ...string) string { return strings.Join(s, "") }
 	highlight := func(s ...string) string { return "<" + strings.Join(s, "") + ">" }
@@ -104,15 +119,167 @@ func TestPrimaryKeyAndNumericRangeDriveDisplayAndMatching(t *testing.T) {
 	}
 }
 
+func TestIndexedActionSupportsNonNumericBindings(t *testing.T) {
+	action := Action{ID: "card", Key: "X", Range: true, Aliases: []string{"Y", "Z"}}
+	if got := action.DisplayKey(); got != "X/Y/Z" {
+		t.Fatalf("display = %q", got)
+	}
+	for _, tc := range []struct {
+		key   string
+		index int
+	}{{"x", 0}, {"Y", 1}, {"z", 2}} {
+		if got, ok := ResolveIndexedAction(action, tc.key); !ok || got != tc.index {
+			t.Fatalf("%q resolved to %d, %v", tc.key, got, ok)
+		}
+	}
+	if _, ok := ResolveIndexedAction(action, "1"); ok {
+		t.Fatal("unbound key matched")
+	}
+}
+
 func TestValidateActionsDetectsConflictingKeysAndIDs(t *testing.T) {
 	if err := ValidateActions([]Action{{ID: "draw", Key: "D"}, {ID: "other", Key: "X", Aliases: []string{"d"}}}); err == nil {
 		t.Fatal("case-insensitive alias collision must be rejected")
+	}
+	if err := ValidateActions([]Action{{ID: "a", Key: "s"}, {ID: "b", Key: "ſ"}}); err == nil {
+		t.Fatal("registration must use the same Unicode case folding as dispatch")
 	}
 	if err := ValidateActions([]Action{{ID: "draw", Key: "D"}, {ID: "draw", Key: "X"}}); err == nil {
 		t.Fatal("duplicate action ID must be rejected")
 	}
 	if err := ValidateActions([]Action{{ID: "draw", Key: "D", Aliases: []string{"down"}}, {Label: "waiting"}, {ID: "cancel", Key: "Esc"}}); err != nil {
 		t.Fatalf("valid scope rejected: %v", err)
+	}
+}
+
+func TestRegistrationRejectsConflictsAndCopiesBindings(t *testing.T) {
+	if _, err := RegisterActions([]Action{{ID: "a", Key: "X"}, {ID: "b", Key: "x"}}); err == nil {
+		t.Fatal("registration accepted conflicting keys")
+	}
+	original := []Action{{ID: "a", Key: "X", Aliases: []string{"Y"}}}
+	registered, err := RegisterActions(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original[0].Aliases[0] = "Z"
+	if _, ok := ResolveAction(registered, "y"); !ok {
+		t.Fatal("registered aliases changed with input")
+	}
+	modal := []Action{{ID: "modal", Key: "Esc"}}
+	ordinary := []Action{{ID: "leave", Key: "Esc"}}
+	if _, err := RegisterActions(modal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RegisterActions(ordinary); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RegisterActions(append(modal, ordinary...)); err == nil {
+		t.Fatal("same-scope conflict was accepted")
+	}
+}
+
+func TestActionUnionChecksSimultaneouslyActiveScopes(t *testing.T) {
+	common := []Action{{ID: "cancel", Key: "Esc", Label: "取消"}, {ID: "help", Key: "?"}}
+	view := []Action{{ID: "cancel", Key: "Esc", Label: "返回"}, {ID: "play", Key: "1"}}
+	if err := ValidateActionUnion(common, view); err != nil {
+		t.Fatalf("same binding rejected: %v", err)
+	}
+	view[1].Key = "?"
+	if err := ValidateActionUnion(common, view); err == nil {
+		t.Fatal("cross-scope key collision accepted")
+	}
+	view[1].Key = "1"
+	view[0].Key = "X"
+	if err := ValidateActionUnion(common, view); err == nil {
+		t.Fatal("same ID with different bindings accepted")
+	}
+}
+
+func TestCheckedActionsShowsErrorWithoutDispatchOrPanic(t *testing.T) {
+	actions := CheckedActions("example", []Action{{ID: "a", Key: "X"}}, []Action{{ID: "b", Key: "x"}})
+	if len(actions) != 1 || !strings.Contains(actions[0].Token(), "按键配置错误") {
+		t.Fatalf("missing error: %+v", actions)
+	}
+	if !ActionScopeInvalid(actions) {
+		t.Fatal("invalid scope was not marked")
+	}
+	if _, ok := ResolveAction(actions, "x"); ok {
+		t.Fatal("invalid scope dispatched a key")
+	}
+}
+
+func TestStaticRegistrationReportsScopeAndConflict(t *testing.T) {
+	defer func() {
+		value := recover()
+		if value == nil || !strings.Contains(fmt.Sprint(value), "example") || !strings.Contains(fmt.Sprint(value), "x") {
+			t.Fatalf("missing registration error detail: %v", value)
+		}
+	}()
+	MustRegisterActions("example", []Action{{ID: "a", Key: "X"}, {ID: "b", Key: "x"}})
+}
+
+func TestHelpViewportShowsAllLinesAndClampsOffset(t *testing.T) {
+	content := "one\ntwo\nthree\nfour\nfive\nsix"
+	view, last := HelpViewport(content, 40, 4, 0)
+	if last != 3 || !strings.Contains(view, "one") || !strings.Contains(view, "翻看") {
+		t.Fatalf("first page: %q last=%d", view, last)
+	}
+	offset := MoveHelpOffset("help-page-down", 0, last, 4)
+	view, _ = HelpViewport(content, 40, 4, offset)
+	if !strings.Contains(view, "six") || strings.Contains(view, "one") {
+		t.Fatalf("last page: %q", view)
+	}
+	if MoveHelpOffset("help-page-down", offset, last, 4) != last {
+		t.Fatal("offset exceeded end")
+	}
+	if MoveHelpOffset("help-page-up", offset, last, 4) != 0 {
+		t.Fatal("page up did not return to start")
+	}
+	var screens strings.Builder
+	for offset := 0; offset <= last; offset++ {
+		page, _ := HelpViewport(content, 40, 4, offset)
+		screens.WriteString(page)
+		screens.WriteByte('\n')
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.Contains(screens.String(), line) {
+			t.Fatalf("line %q is unreachable", line)
+		}
+	}
+}
+
+func TestFrameViewportExposesEveryLine(t *testing.T) {
+	content := "one\ntwo\nthree\nfour\nfive"
+	view, last := FrameViewport(content, 40, 3, 0)
+	if last != 3 || !strings.Contains(view, "Ctrl+") {
+		t.Fatalf("viewport: %q last=%d", view, last)
+	}
+	var seen strings.Builder
+	for offset := 0; offset <= last; offset++ {
+		page, _ := FrameViewport(content, 40, 3, offset)
+		seen.WriteString(page)
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.Contains(seen.String(), line) {
+			t.Fatalf("line %q unreachable", line)
+		}
+	}
+	if MoveFrameOffset("frame-page-down", 0, last, 3) != 2 {
+		t.Fatal("frame page movement is incorrect")
+	}
+}
+
+func TestFrameViewportWrapsLongLinesWithoutLosingText(t *testing.T) {
+	content := "这是一个非常长的中文状态说明需要完整显示"
+	_, last := FrameViewport(content, 10, 2, 0)
+	var seen strings.Builder
+	for offset := 0; offset <= last; offset++ {
+		page, _ := FrameViewport(content, 10, 2, offset)
+		lines := strings.Split(page, "\n")
+		seen.WriteString(lines[0])
+	}
+	if !strings.Contains(seen.String(), content) {
+		t.Fatalf("wrapped content lost: %q", seen.String())
 	}
 }
 

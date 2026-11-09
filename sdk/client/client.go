@@ -67,6 +67,7 @@ type Snapshot struct {
 	MySeat             int
 	MaxSeats           int
 	IsHost             bool
+	DLC                []string
 	View               any
 	Timeline           []TimelineEntry
 	Vote               *Vote
@@ -75,6 +76,16 @@ type Snapshot struct {
 	PendingLeftMS int64
 	// Kicked 表示这一帧是"你在别处登录，这个连接被顶掉了"，发完就关通道。
 	Kicked bool
+}
+
+// DLCClient is optional: games without room content settings need not implement it.
+type DLCClient interface {
+	SetDLC(id string, enabled bool) error
+}
+
+// DLCToggler atomically flips a room option, even if the UI snapshot is stale.
+type DLCToggler interface {
+	ToggleDLC(id string) error
 }
 
 // SnapshotMsg carries a room update through the UI event loop.

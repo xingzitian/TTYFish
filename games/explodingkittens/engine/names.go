@@ -5,6 +5,7 @@ var cardNames = map[Kind]string{
 	Defuse:          "拆弹",
 	Attack:          "攻击",
 	Skip:            "跳过",
+	Reverse:         "反转",
 	Favor:           "索要",
 	Shuffle:         "洗牌",
 	SeeTheFuture:    "预知未来",

@@ -102,6 +102,7 @@ type Snapshot struct {
 	MySeat             int                    `json:"my_seat"`
 	MaxSeats           int                    `json:"max_seats"`
 	IsHost             bool                   `json:"is_host"`
+	DLC                []string               `json:"dlc,omitempty"`
 	View               any                    `json:"view"`
 	Timeline           []client.TimelineEntry `json:"timeline"`
 	Vote               *client.Vote           `json:"vote"`
@@ -130,7 +131,37 @@ func (m *membership) encode(snap client.Snapshot) (Snapshot, error) {
 	if timeline == nil {
 		timeline = []client.TimelineEntry{}
 	}
-	return Snapshot{1, m.game.ID, snap.Code, snap.Revision, phase, snap.Players, snap.MySeat, snap.MaxSeats, snap.IsHost, view, timeline, snap.Vote, snap.Notice, snap.PendingLeftMS, snap.Kicked, snap.SettlementRevision}, nil
+	return Snapshot{ProtocolVersion: 1, GameID: m.game.ID, Code: snap.Code, Revision: snap.Revision, Phase: phase, Players: snap.Players, MySeat: snap.MySeat, MaxSeats: snap.MaxSeats, IsHost: snap.IsHost, DLC: snap.DLC, View: view, Timeline: timeline, Vote: snap.Vote, Notice: snap.Notice, PendingLeftMS: snap.PendingLeftMS, Kicked: snap.Kicked, SettlementRevision: snap.SettlementRevision}, nil
+}
+
+func (s *Service) SetDLC(id, code, dlc string, enabled bool) (Snapshot, error) {
+	return s.updateDLC(id, code, dlc, enabled, false)
+}
+
+func (s *Service) ToggleDLC(id, code, dlc string) (Snapshot, error) {
+	return s.updateDLC(id, code, dlc, false, true)
+}
+
+func (s *Service) updateDLC(id, code, dlc string, enabled, toggle bool) (Snapshot, error) {
+	code, err := validCode(code)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m, err := s.currentLocked(id, code)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if toggle {
+		err = m.room.ToggleDLC(identity(id), dlc)
+	} else {
+		err = m.room.SetDLC(identity(id), dlc, enabled)
+	}
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("%w: %w", ErrAction, err)
+	}
+	return s.snapshot(m, id)
 }
 func (s *Service) currentLocked(id, code string) (*membership, error) {
 	if s.closed {

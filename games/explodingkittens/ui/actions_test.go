@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/xingzitian/TTYFish/games/explodingkittens/engine"
 	"github.com/xingzitian/TTYFish/sdk/client"
 	"github.com/xingzitian/TTYFish/sdk/ui"
@@ -25,6 +26,64 @@ func TestRegisteredResponseKeyDrivesHintAndInput(t *testing.T) {
 	press(m, "x")
 	if c.acted != 1 || c.last.Type != engine.PlayNope {
 		t.Fatalf("new response key did not play Nope: %+v", c.last)
+	}
+}
+
+func TestHelpCanScrollWhenTerminalIsShort(t *testing.T) {
+	m, _ := newTestModel(t, playingObs(), client.Playing)
+	m.width, m.height = 40, 4
+	press(m, "?")
+	if !strings.Contains(strip(m.View()), "翻看") {
+		t.Fatal("missing scroll indicator")
+	}
+	for i := 0; i < 30; i++ {
+		m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	if !strings.Contains(strip(m.View()), "断开连接") {
+		t.Fatalf("cannot reach end of help:\n%s", strip(m.View()))
+	}
+	press(m, "esc")
+	if m.help || m.helpOffset != 0 {
+		t.Fatal("escape did not close and reset help")
+	}
+}
+
+func TestReboundCardKeysSelectTheirRegisteredPositions(t *testing.T) {
+	old := cardAction
+	t.Cleanup(func() { cardAction = old })
+	cardAction.Key = "X"
+	cardAction.Aliases = []string{"Y", "3", "4", "5"}
+	m, c := newTestModel(t, playingObs(engine.Card{ID: 10, Kind: engine.Skip}, engine.Card{ID: 11, Kind: engine.Shuffle}), client.Playing)
+	page, _ := m.pageCards()
+	want := page[1].ID
+	press(m, "2")
+	if c.acted != 0 {
+		t.Fatal("old key still selected a card")
+	}
+	press(m, "y")
+	if c.acted != 1 || len(c.last.CardIDs) != 1 || c.last.CardIDs[0] != want {
+		t.Fatalf("second card: %+v", c.last)
+	}
+}
+
+func TestChatModalDoesNotDispatchTableKeys(t *testing.T) {
+	m, c := newTestModel(t, playingObs(), client.Playing)
+	m.step = stepChat
+	layout, mode := m.opts.Layout, m.opts.Mode
+	press(m, "i")
+	press(m, "m")
+	press(m, "?")
+	if m.opts.Layout != layout || m.opts.Mode != mode || m.help || m.step != stepChat {
+		t.Fatal("chat modal allowed an unrelated operation")
+	}
+	press(m, "1")
+	if c.chat != 1 || m.step != stepIdle {
+		t.Fatal("chat choice was not sent")
+	}
+	m.step = stepChat
+	press(m, "esc")
+	if m.step != stepIdle {
+		t.Fatal("escape did not close chat")
 	}
 }
 
@@ -103,6 +162,29 @@ func TestActualCommandActionsAreUnambiguous(t *testing.T) {
 	}
 }
 
+func TestTargetScopeRejectsConflictWithGlobalAction(t *testing.T) {
+	old := commonActions[1]
+	t.Cleanup(func() { commonActions[1] = old })
+	commonActions[1].Key = "1"
+	m, _ := newTestModel(t, playingObs(), client.Playing)
+	m.step = stepTarget
+	actions, _ := m.commandActions()
+	if len(actions) != 1 || !strings.Contains(actions[0].Label, "按键配置错误") {
+		t.Fatalf("missing active-scope error: %+v", actions)
+	}
+	if !strings.Contains(strip(m.View()), "按键配置错误") {
+		t.Fatal("conflict was not visible to the player")
+	}
+	if _, ok := ui.ResolveAction(actions, "1"); ok {
+		t.Fatal("conflicting scope dispatched an action")
+	}
+	layout := m.opts.Layout
+	press(m, "1")
+	if m.opts.Layout != layout || m.step != stepTarget {
+		t.Fatal("common action bypassed conflicting scope")
+	}
+}
+
 func TestHelpUsesCustomReinsertActions(t *testing.T) {
 	o := playingObs(engine.Card{ID: 4, Kind: engine.Defuse})
 	o.Phase = engine.Reinserting
@@ -174,6 +256,59 @@ func TestChatModalFitsSmallTerminalInLobbyAndGame(t *testing.T) {
 			if !strings.Contains(view, "[Esc]取消") || strings.Contains(view, "[D]摸牌") {
 				t.Fatalf("wrong modal controls:\n%s", view)
 			}
+		}
+	}
+}
+
+func TestChatCanScrollInVeryShortTerminal(t *testing.T) {
+	m, c := newTestModel(t, playingObs(), client.Playing)
+	m.width, m.height, m.step = 40, 2, stepChat
+	var seen strings.Builder
+	for i := 0; i < 30; i++ {
+		seen.WriteString(strip(m.View()))
+		m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	}
+	for _, text := range client.Presets {
+		if !strings.Contains(seen.String(), text) {
+			t.Fatalf("chat option %q unreachable", text)
+		}
+	}
+	if m.step != stepChat || c.chat != 0 {
+		t.Fatal("scrolling triggered a chat or closed its modal")
+	}
+}
+
+func TestChatStartsAtTopAfterScrollingTable(t *testing.T) {
+	m, _ := newTestModel(t, playingObs(), client.Playing)
+	m.width, m.height = 40, 2
+	m.View()
+	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	m.View()
+	if m.frameOffset == 0 {
+		t.Fatal("table did not scroll")
+	}
+	press(m, "t")
+	view := strip(m.View())
+	if m.frameOffset != 0 || !strings.Contains(view, "快捷语") {
+		t.Fatalf("chat did not start at top: %q offset=%d", view, m.frameOffset)
+	}
+}
+
+func TestLongStatusAndLobbyNoticeRemainReadable(t *testing.T) {
+	message := "这是很长的错误提示必须完整显示最后的内容"
+	for _, layout := range []ui.Layout{ui.LayoutCompact, ui.LayoutRich} {
+		m, _ := newTestModel(t, playingObs(), client.Playing)
+		m.width, m.height, m.opts.Layout = 24, 3, layout
+		m.fail(message)
+		status := strings.ReplaceAll(strip(m.statusLine(24)), "\n", "")
+		if !strings.Contains(status, message) {
+			t.Fatalf("status lost text: %q", status)
+		}
+		m.snap.Phase = client.Lobby
+		m.snap.Notice = message
+		lobby := strings.ReplaceAll(strip(m.viewLobby()), "\n", "")
+		if !strings.Contains(lobby, message) {
+			t.Fatalf("lobby lost text: %q", lobby)
 		}
 	}
 }

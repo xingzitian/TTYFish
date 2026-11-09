@@ -179,6 +179,7 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 		return nil
 	case "?":
 		m.help = !m.help
+		m.helpOffset = 0
 		return nil
 	case "i":
 		m.toggleLayout()
@@ -200,7 +201,9 @@ func (m *Model) handleCompactKey(key string) tea.Cmd {
 	}
 
 	if m.tableActionKey(key) == cardAction.ID {
-		m.playIndex(int(key[0] - '1'))
+		if index, ok := ui.ResolveIndexedAction(handAction(true), key); ok {
+			m.playIndex(index)
+		}
 		return nil
 	}
 

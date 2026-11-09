@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	unoui "github.com/xingzitian/TTYFish/games/uno/ui"
 	"github.com/xingzitian/TTYFish/hub/internal/backend"
 	"github.com/xingzitian/TTYFish/hub/internal/registry"
 	"github.com/xingzitian/TTYFish/sdk/client"
@@ -18,6 +19,28 @@ type modalModel struct {
 	modal   bool
 	forward int // 收到多少次按键
 	keys    int
+}
+
+type reboundDisconnectModel struct{ modalModel }
+
+type conflictingDisconnectModel struct{ reboundDisconnectModel }
+
+func (m *conflictingDisconnectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	_, cmd := m.modalModel.Update(msg)
+	return m, cmd
+}
+
+func (m *conflictingDisconnectModel) DisconnectAction() ui.Action {
+	return ui.Action{ID: "quit", Key: "Y", Label: "断开"}
+}
+
+func (m *reboundDisconnectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	_, cmd := m.modalModel.Update(msg)
+	return m, cmd
+}
+
+func (m *reboundDisconnectModel) DisconnectAction() ui.Action {
+	return ui.Action{ID: "quit", Key: "X", Label: "断开"}
 }
 
 func (m *modalModel) Init() tea.Cmd { return nil }
@@ -104,6 +127,48 @@ func TestQDisconnectsImmediately(t *testing.T) {
 	}
 }
 
+func TestGameDisconnectBindingIsHonouredByGateway(t *testing.T) {
+	model := &reboundDisconnectModel{}
+	r := newEscRoot(t, model)
+	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if r.quit {
+		t.Fatal("old disconnect key was still intercepted")
+	}
+	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if !r.quit {
+		t.Fatal("registered disconnect key was not intercepted")
+	}
+}
+
+func TestGameDisconnectBindingIsHonouredDuringLeaveConfirmation(t *testing.T) {
+	model := &reboundDisconnectModel{}
+	r := newEscRoot(t, model)
+	pressEsc(r)
+	if !r.confirmLeave {
+		t.Fatal("expected leave confirmation")
+	}
+	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	if !r.quit {
+		t.Fatal("registered disconnect key did not exit confirmation")
+	}
+}
+
+func TestLeaveConfirmationReportsBindingConflictAndCanCancel(t *testing.T) {
+	r := newEscRoot(t, &conflictingDisconnectModel{})
+	pressEsc(r)
+	if !strings.Contains(strip(r.View()), "按键配置冲突") {
+		t.Fatal("missing conflict notice")
+	}
+	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if r.quit || !r.confirmLeave {
+		t.Fatal("conflicting action was dispatched")
+	}
+	pressEsc(r)
+	if r.confirmLeave {
+		t.Fatal("escape must remain available to close the conflicting dialog")
+	}
+}
+
 // TestEscGoesToGameWhenModal 游戏正在弹窗时，Esc 归游戏处理，不能把玩家踢出房间。
 func TestEscGoesToGameWhenModal(t *testing.T) {
 	model := &modalModel{modal: true}
@@ -115,6 +180,35 @@ func TestEscGoesToGameWhenModal(t *testing.T) {
 	}
 	if model.forward == 0 {
 		t.Fatal("Esc 应该转发给游戏界面去关弹窗")
+	}
+}
+
+func TestFirstLayoutChoiceOwnsKeysUntilSelected(t *testing.T) {
+	gameClient := &fakeClient{joined: "ABC123", phase: client.Playing}
+	model := unoui.NewModel(unoui.Identity{Key: "first-user"}, gameClient, unoui.Options{
+		LayoutOf: func(string) (ui.Layout, bool) { return ui.LayoutRich, false },
+	}, nil)
+	r := newEscRoot(t, model)
+	pressEsc(r)
+	if r.confirmLeave || r.level != levelTable {
+		t.Fatal("gateway consumed Esc during layout choice")
+	}
+	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	pressEsc(r)
+	if !r.confirmLeave {
+		t.Fatal("gateway did not regain Esc after layout choice")
+	}
+}
+
+func TestFirstLayoutChoiceStillAllowsEmergencyDisconnect(t *testing.T) {
+	gameClient := &fakeClient{joined: "ABC123", phase: client.Playing}
+	model := unoui.NewModel(unoui.Identity{Key: "first-user"}, gameClient, unoui.Options{
+		LayoutOf: func(string) (ui.Layout, bool) { return ui.LayoutRich, false },
+	}, nil)
+	r := newEscRoot(t, model)
+	r.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if gameClient.joined != "" {
+		t.Fatal("disconnect was not handled during layout choice")
 	}
 }
 
@@ -145,6 +239,23 @@ func TestLeaveConfirmationKeepsPriorityIfGameOpensModal(t *testing.T) {
 	pressEsc(r)
 	if r.confirmLeave || model.keys != forwarded {
 		t.Fatal("confirmation must receive Esc before a newly opened game modal")
+	}
+}
+
+func TestResizeReservesConfirmationRow(t *testing.T) {
+	r := newEscRoot(t, &modalModel{})
+	pressEsc(r)
+	if !r.confirmLeave {
+		t.Fatal("expected confirmation")
+	}
+	size := r.gameMsg(tea.WindowSizeMsg{Width: 80, Height: 12}).(tea.WindowSizeMsg)
+	if size.Width != 80 || size.Height != 10 {
+		t.Fatalf("unexpected game size: %+v", size)
+	}
+	pressEsc(r)
+	size = r.gameMsg(tea.WindowSizeMsg{Width: 80, Height: 12}).(tea.WindowSizeMsg)
+	if size.Height != 11 {
+		t.Fatalf("unexpected size after closing confirmation: %+v", size)
 	}
 }
 

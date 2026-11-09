@@ -13,30 +13,45 @@ import (
 
 // View 是整帧入口：老板键 → 断线 → 帮助 → 极简/丰富。
 func (m *Model) View() string {
+	scope := fmt.Sprintf("%t/%t/%t/%t/%d/%v/%d/%d", m.boss, m.help, m.snap.Kicked, m.closed, m.snap.Phase, m.obs().Phase, m.step, m.opts.Layout)
+	if scope != m.frameScope {
+		m.frameOffset, m.frameLast, m.frameScope = 0, 0, scope
+	}
 	if m.boss {
+		m.frameOffset, m.frameLast = 0, 0
 		return ui.ClampFrame("$ go test ./...\nok   ttyfish/explodingkittens (cached)\n$ ", m.width, m.height)
 	}
 	if m.snap.Kicked {
+		m.frameOffset, m.frameLast = 0, 0
 		return ui.ClampFrame(m.warn().Render("你已在另一台设备登录，这个连接被顶掉了。"), m.width, m.height)
 	}
 	if m.closed {
+		m.frameOffset, m.frameLast = 0, 0
 		return ui.ClampFrame(m.dim().Render("连接已断开。重新 ssh 上来还能回到刚才的房间。"), m.width, m.height)
 	}
 	if m.help {
+		m.frameOffset, m.frameLast = 0, 0
 		return ui.ClampFrame(m.viewHelp(), m.width, m.height)
 	}
 	if m.step == stepChat {
 		// The shortcut menu owns the keyboard; keep every choice visible even
 		// when the underlying table or lobby would exhaust the terminal height.
-		return ui.ClampFrame(m.cmdLine(m.width), m.width, m.height)
+		return m.frameView(m.cmdLine(m.width))
 	}
 	if !m.inGame() {
-		return ui.ClampFrame(m.viewLobby(), m.width, m.height)
+		return m.frameView(m.viewLobby())
 	}
 	if m.opts.Layout == ui.LayoutCompact {
-		return ui.ClampFrame(m.viewCompact(), m.width, m.height)
+		return m.frameView(m.viewCompact())
 	}
-	return ui.ClampFrame(m.viewRich(), m.width, m.height)
+	return m.frameView(m.viewRich())
+}
+
+func (m *Model) frameView(content string) string {
+	view, last := ui.FrameViewport(content, m.width, m.height, m.frameOffset)
+	m.frameLast = last
+	m.frameOffset = min(m.frameOffset, last)
+	return view
 }
 
 func lipglossWidth(s string) int { return lipgloss.Width(s) }
@@ -126,9 +141,9 @@ func (m *Model) sidePanel(width, height int) string {
 // statusLine 是 [MSG] 行：当前该干什么，或者刚刚发生了什么。
 func (m *Model) statusLine(width int) string {
 	if m.errVisible() {
-		return m.warn().Render("[MSG] " + ui.CutWidth(m.errMsg, max(10, width-6)))
+		return ansi.Hardwrap(m.warn().Render("[MSG] "+m.errMsg), max(1, width), true)
 	}
-	return m.dim().Render("[MSG] ") + ansi.Truncate(m.hint(), max(1, width-6), "")
+	return ansi.Hardwrap(m.dim().Render("[MSG] ")+m.hint(), max(1, width), true)
 }
 
 // hint 按"阶段 + 选择进度"只说一件事。
@@ -239,7 +254,25 @@ func (m *Model) cmdLine(width int) string {
 }
 
 // commandActions returns the current contextual operations and their prefix.
-func (m *Model) commandActions() ([]ui.Action, string) {
+func (m *Model) commandActions() (actions []ui.Action, prefix string) {
+	defer func() {
+		activeCommon := commonActions
+		var extra []ui.Action
+		if m.step == stepChat {
+			activeCommon = ui.SelectActions(commonActions, "quit")
+		} else if m.obs().Phase == engine.Reinserting && m.alive() && m.obs().Seat == m.obs().Turn {
+			activeCommon = nil
+			for _, action := range commonActions {
+				if action.ID != "layout" {
+					activeCommon = append(activeCommon, action)
+				}
+			}
+			if m.step == stepDefuseCustom {
+				extra = ui.SelectActions(reinsertActions, "i")
+			}
+		}
+		actions = ui.CheckedActions("kittens", actions, activeCommon, extra, []ui.Action{ui.BossAction(), ui.InterruptAction()}, ui.FrameScrollActions())
+	}()
 	o := m.obs()
 	if m.step == stepChat {
 		return append(chatActions(), ui.EscapeAction("取消")), ">> 快捷语: "
@@ -265,10 +298,10 @@ func (m *Model) commandActions() ([]ui.Action, string) {
 		return actions, ">> 埋雷位置: "
 	}
 
-	actions := ui.SelectActions(commonActions, "help")
+	actions = ui.SelectActions(commonActions, "help")
 	if !m.inGame() {
 		if m.snap.IsHost {
-			actions = append(actions, ui.SelectActions(lobbyActions, "s", "b")...)
+			actions = append(actions, ui.SelectActions(lobbyActions, "s", "b", "dlc")...)
 		} else {
 			actions = append(actions, ui.Action{Label: "等待房主开始"})
 		}

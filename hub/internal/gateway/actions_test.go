@@ -71,3 +71,22 @@ func TestMenuCommandsWrapAtNarrowWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestMenuCanScrollInVeryShortTerminal(t *testing.T) {
+	r, _ := newRoot(t)
+	r.Init()
+	r.Update(tea.WindowSizeMsg{Width: 40, Height: 3})
+	var seen strings.Builder
+	for i := 0; i < 30; i++ {
+		seen.WriteString(strip(r.View()))
+		r.Update(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	}
+	for _, text := range []string{"Game", "Settings", "Exit", "[Enter]选择", "[Esc]退出"} {
+		if !strings.Contains(seen.String(), text) {
+			t.Fatalf("menu item %q unreachable", text)
+		}
+	}
+	if r.level != levelHome || r.quit {
+		t.Fatal("scrolling changed the menu or disconnected")
+	}
+}

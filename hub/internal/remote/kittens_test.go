@@ -88,6 +88,65 @@ func TestKittensRemoteRoundTripUsesJoinedGameAndAuthenticatedSeat(t *testing.T) 
 	}
 }
 
+func TestRemoteDLCSettingUpdatesSnapshot(t *testing.T) {
+	service, err := play.New([]play.Game{{ID: kittens.ID, Rules: kittens.Game{}, Codec: kitprotocol.Codec{}}}, room.Options{NoLoop: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	created, err := service.Create("alice", "Alice", kittens.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		base := "/api/v1/rooms/" + created.Code + "/dlc"
+		if r.Method != "POST" || (r.URL.Path != base && r.URL.Path != base+"/toggle") {
+			http.Error(w, "unexpected endpoint", 400)
+			return
+		}
+		var req struct {
+			ID      string `json:"id"`
+			Enabled bool   `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		var snap play.Snapshot
+		var err error
+		if r.URL.Path == base+"/toggle" {
+			snap, err = service.ToggleDLC("alice", created.Code, req.ID)
+		} else {
+			snap, err = service.SetDLC("alice", created.Code, req.ID, req.Enabled)
+		}
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(snap)
+	}))
+	defer server.Close()
+	c := New(server.URL, "token", kittens.ID)
+	raw, _ := json.Marshal(created)
+	var wire wireSnapshot
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	c.apply(wire)
+	if err := c.SetDLC(kittens.ReverseDLC, true); err != nil {
+		t.Fatal(err)
+	}
+	if snap := c.Snapshot(); len(snap.DLC) != 1 || snap.DLC[0] != kittens.ReverseDLC || snap.Revision <= created.Revision {
+		t.Fatalf("bad remote DLC snapshot: %+v", snap)
+	}
+	if err := c.ToggleDLC(kittens.ReverseDLC); err != nil {
+		t.Fatal(err)
+	}
+	if snap := c.Snapshot(); len(snap.DLC) != 0 {
+		t.Fatalf("toggle did not disable DLC: %+v", snap.DLC)
+	}
+}
+
 func TestRemoteViewDispatchRetainsUNOAndRejectsUnknownGame(t *testing.T) {
 	if decodeGameView("unknown", json.RawMessage(`{"seat":0}`), 0) != nil {
 		t.Fatal("unknown game silently decoded as UNO")

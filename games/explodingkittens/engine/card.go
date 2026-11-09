@@ -11,6 +11,7 @@ const (
 	Defuse          Kind = "defuse"
 	Attack          Kind = "attack"
 	Skip            Kind = "skip"
+	Reverse         Kind = "reverse"
 	Favor           Kind = "favor"
 	Shuffle         Kind = "shuffle"
 	SeeTheFuture    Kind = "see_the_future"
@@ -28,6 +29,9 @@ type Card struct {
 }
 
 func (k Kind) valid() bool {
+	if k == Reverse {
+		return true
+	}
 	for _, entry := range deckComposition {
 		if entry.kind == k {
 			return true

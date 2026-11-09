@@ -113,6 +113,66 @@ func TestActualTableActionsAreUnambiguousInBothLayouts(t *testing.T) {
 	}
 }
 
+func TestTableRejectsConflictWithActiveCommonAction(t *testing.T) {
+	old := playActions[1]
+	t.Cleanup(func() { playActions[1] = old })
+	playActions[1].Key = "M"
+	m, _ := playingState(false).model()
+	actions := m.tableActions()
+	if len(actions) != 1 || !strings.Contains(actions[0].Label, "按键配置错误") {
+		t.Fatalf("missing active-scope error: %+v", actions)
+	}
+	if !strings.Contains(strip(m.View()), "按键配置错误") {
+		t.Fatal("conflict was not visible to the player")
+	}
+	if _, ok := ui.ResolveAction(actions, "m"); ok {
+		t.Fatal("conflicting scope dispatched an action")
+	}
+	mode := m.mode
+	m.handleKey(keyOf("m"))
+	if m.mode != mode {
+		t.Fatal("common action bypassed conflicting scope")
+	}
+}
+
+func TestReboundCardKeysSelectTheirRegisteredPositions(t *testing.T) {
+	old := cardAction
+	t.Cleanup(func() { cardAction = old })
+	cardAction.Key = "X"
+	cardAction.Aliases = []string{"Y", "3", "4", "5", "6", "7", "8", "9"}
+	for _, compact := range []bool{false, true} {
+		m, rec := playingState(compact).model()
+		m.handleKey(keyOf("2"))
+		if len(rec.calls) != 0 {
+			t.Fatalf("compact=%v: old key still active", compact)
+		}
+		m.handleKey(keyOf("y"))
+		if len(rec.calls) != 1 || !strings.Contains(rec.calls[0], "PlayCard#1") {
+			t.Fatalf("compact=%v: second card calls=%v", compact, rec.calls)
+		}
+	}
+}
+
+func TestLayoutChoiceIsModalForGateway(t *testing.T) {
+	m, _ := playingState(false).model()
+	m.needLayoutChoice = true
+	if !m.HasModal() {
+		t.Fatal("layout choice must retain keyboard ownership")
+	}
+}
+
+func TestCompactHandAcceptsFewerRegisteredKeys(t *testing.T) {
+	old := cardAction
+	t.Cleanup(func() { cardAction = old })
+	cardAction.Key = "X"
+	cardAction.Aliases = []string{"Y"}
+	m, rec := playingState(true).model()
+	m.handleKey(keyOf("y"))
+	if len(rec.calls) != 1 || !strings.Contains(rec.calls[0], "PlayCard#1") {
+		t.Fatalf("second card calls=%v", rec.calls)
+	}
+}
+
 func TestHelpUsesCurrentTurnAndLayoutActions(t *testing.T) {
 	for _, compact := range []bool{false, true} {
 		state := playingState(compact)

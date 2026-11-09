@@ -15,12 +15,56 @@ import (
 
 type fakeClient struct {
 	client.Client
-	snap   client.Snapshot
-	last   engine.Action
-	acted  int
-	start  int
-	addBot int
-	chat   int
+	snap       client.Snapshot
+	last       engine.Action
+	acted      int
+	start      int
+	addBot     int
+	chat       int
+	dlcID      string
+	dlcEnabled bool
+}
+
+func (c *fakeClient) SetDLC(id string, enabled bool) error {
+	c.dlcID, c.dlcEnabled = id, enabled
+	return nil
+}
+
+func (c *fakeClient) ToggleDLC(id string) error {
+	c.dlcID, c.dlcEnabled = id, !c.dlcEnabled
+	return nil
+}
+
+func TestLobbyReverseDLCToggleAndDirection(t *testing.T) {
+	m, c := newTestModel(t, engine.Observation{}, client.Lobby)
+	if view := strip(m.View()); !strings.Contains(view, "反转牌：关闭") || !strings.Contains(view, "[X]切换反转DLC") {
+		t.Fatalf("missing DLC selector: %s", view)
+	}
+	press(m, "x")
+	if c.dlcID != "reverse" || !c.dlcEnabled {
+		t.Fatal("DLC enable not sent")
+	}
+	press(m, "x")
+	if c.dlcEnabled {
+		t.Fatal("DLC disable not sent")
+	}
+	m.snap.IsHost = false
+	c.dlcID = ""
+	press(m, "x")
+	if c.dlcID != "" {
+		t.Fatal("non-host changed DLC")
+	}
+	o := playingObs(engine.Card{ID: 10, Kind: engine.Reverse})
+	o.Direction = -1
+	m, c = newTestModel(t, o, client.Playing)
+	view := strip(m.View())
+	if !strings.Contains(view, "[功能|反转]") || !strings.Contains(view, "←") {
+		t.Fatalf("missing reverse or direction: %s", view)
+	}
+	press(m, "1")
+	if c.acted != 1 || c.last.Type != engine.Play || c.last.CardIDs[0] != 10 {
+		t.Fatal("reverse card not playable")
+	}
 }
 
 func (c *fakeClient) Snapshot() client.Snapshot       { return c.snap }

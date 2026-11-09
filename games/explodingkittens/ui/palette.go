@@ -34,6 +34,7 @@ var palettes = map[engine.Kind]cardStyle{
 	engine.Nope:         {"功能", "否决", "208", "16", 3},
 	engine.Attack:       {"功能", "攻击", "208", "16", 4},
 	engine.Skip:         {"功能", "跳过", "208", "16", 5},
+	engine.Reverse:      {"功能", "反转", "208", "16", 5},
 	engine.Favor:        {"功能", "索要", "208", "16", 6},
 	engine.Shuffle:      {"功能", "洗牌", "208", "16", 7},
 	engine.SeeTheFuture: {"功能", "预言", "208", "16", 8},

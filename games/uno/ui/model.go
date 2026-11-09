@@ -76,10 +76,14 @@ type Model struct {
 	pending  engine.Card
 	mode     ui.ColorMode
 	// help 为 true 时显示键位一览（? 打开）
-	help   bool
-	width  int
-	height int
-	layout layoutKind
+	help        bool
+	helpOffset  int
+	frameOffset int
+	frameLast   int
+	frameScope  string
+	width       int
+	height      int
+	layout      layoutKind
 
 	// 极简模式
 	minimal bool
@@ -264,9 +268,13 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 		switch action {
 		case "close-help", "cancel":
 			m.help = false
+			m.helpOffset = 0
 		case "q":
 			// 老板键在帮助界面里照样有效，不能因为看着帮助就失联
 			return m.quit()
+		case "help-up", "help-down", "help-page-up", "help-page-down":
+			_, last := ui.HelpViewport(m.helpContent(), m.width, m.height, m.helpOffset)
+			m.helpOffset = ui.MoveHelpOffset(action, m.helpOffset, last, m.height)
 		}
 		return nil
 	}
@@ -275,6 +283,12 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 			m.boss = false
 		}
 		return nil
+	}
+	if m.frameLast > 0 {
+		if action, ok := ui.ResolveAction(ui.FrameScrollActions(), key); ok {
+			m.frameOffset = ui.MoveFrameOffset(action, m.frameOffset, m.frameLast, m.height)
+			return nil
+		}
 	}
 
 	if action, _ := ui.ResolveAction([]ui.Action{ui.InterruptAction()}, key); action == "interrupt" {
@@ -305,6 +319,10 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 
 	// 首次登录的界面选择：只认 1 / 2，别的键一律忽略，免得误触进了牌桌
 	if m.needLayoutChoice {
+		// Preserve the connection-wide emergency disconnect even in this modal.
+		if commonActionKey(key) == "q" {
+			return m.quit()
+		}
 		action, _ := ui.ResolveAction(layoutChoiceActions, key)
 		switch action {
 		case "rich":
@@ -313,6 +331,17 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 			m.applyLayout(ui.LayoutCompact)
 		}
 		return nil
+	}
+	if !m.choosing && m.pendingChallenge() == nil {
+		var actions []ui.Action
+		if m.snap.Phase == client.Playing {
+			actions = m.tableActions()
+		} else {
+			actions = m.currentLobbyActions()
+		}
+		if ui.ActionScopeInvalid(actions) {
+			return nil
+		}
 	}
 
 	// 极简模式：数字直接出牌、左右翻页，其余交给共用表。
@@ -343,6 +372,7 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	switch commonActionKey(key) {
 	case "?":
 		m.help = true
+		m.helpOffset = 0
 		return nil
 	case "q":
 		return m.quit()
@@ -446,7 +476,9 @@ func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
 	case "p":
 		m.act(engine.Pass{Seat: m.snap.MySeat})
 	case "card":
-		m.playIndex(int(key[0] - '1'))
+		if index, ok := ui.ResolveIndexedAction(handAction(m.minimal), key); ok {
+			m.playIndex(index)
+		}
 	}
 	return nil
 }
@@ -582,7 +614,14 @@ func (m *Model) leave() {
 //
 // 有的话 Esc 应该先关弹窗（选色、聊天、质疑），而不是被当成"离开房间"。
 func (m *Model) HasModal() bool {
-	return m.choosing || m.chat || m.entering || m.boss || m.help
+	return m.choosing || m.chat || m.entering || m.boss || m.help || m.needLayoutChoice
+}
+
+func (m *Model) DisconnectAction() ui.Action {
+	for _, action := range ui.SelectActions(commonActions, "q") {
+		return action
+	}
+	return ui.Action{}
 }
 
 func (m *Model) Close() {

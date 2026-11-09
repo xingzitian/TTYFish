@@ -115,6 +115,8 @@ type Root struct {
 	layoutNow sdkui.Layout
 
 	width, height int
+	frameOffset   int
+	frameLast     int
 	closed        bool
 	quit          bool
 }
@@ -216,6 +218,7 @@ func (r *Root) newGameUI(entry registry.Entry, client_ client.Client) registry.M
 
 // gotoLevel 切换屏幕并重建对应的条目。
 func (r *Root) gotoLevel(l level) {
+	r.frameOffset, r.frameLast = 0, 0
 	if l != levelSettings {
 		r.settingsMessage = ""
 	}
@@ -301,6 +304,12 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return r, nil
 	}
+	if key, ok := msg.(tea.KeyMsg); ok && r.level != levelTable && r.frameLast > 0 {
+		if action, ok := sdkui.ResolveAction(sdkui.FrameScrollActions(), key.String()); ok {
+			r.frameOffset = sdkui.MoveFrameOffset(action, r.frameOffset, r.frameLast, r.height)
+			return r, nil
+		}
+	}
 
 	// 牌桌上时把消息交给游戏界面；高度留一行给标题栏。
 	if r.level == levelTable && r.game != nil {
@@ -309,15 +318,16 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// 否则玩家连弹窗都退不出去。
 		if key, ok := msg.(tea.KeyMsg); ok && (r.confirmLeave || !r.gameHasModal()) {
 			cancel, _ := sdkui.ResolveAction([]sdkui.Action{sdkui.EscapeAction("")}, key.String())
+			disconnect, _ := sdkui.ResolveAction([]sdkui.Action{r.disconnectAction()}, key.String())
 			switch {
 			case r.confirmLeave:
 				// 确认中只认几个键，其它一律忽略——这时最怕误触。
 				// q 仍然保留：万一确认框让人以为卡死了，老板键必须还能用。
-				action, _ := sdkui.ResolveAction(leaveConfirmActions, key.String())
+				action, _ := sdkui.ResolveAction(r.confirmActions(), key.String())
 				switch action {
 				case "leave":
 					return r, r.leaveRoom()
-				case "stay":
+				case "stay", "cancel":
 					return r, r.setConfirmLeave(false)
 				case "quit":
 					r.quit = true
@@ -331,7 +341,7 @@ func (r *Root) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return r, r.setConfirmLeave(true)
 				}
 				return r, r.leaveRoom()
-			case key.String() == "q":
+			case disconnect != "":
 				// 老板键：立刻断开这条连接，终端回到本地提示符，
 				// 旁人看到的就是"这人干完活退出了"。不留确认，要的就是快。
 				r.quit = true
@@ -374,6 +384,31 @@ func (r *Root) inGame() bool {
 func (r *Root) gameHasModal() bool {
 	modal, ok := r.game.(registry.Modal)
 	return ok && modal.HasModal()
+}
+
+func (r *Root) disconnectAction() sdkui.Action {
+	if provider, ok := r.game.(registry.DisconnectBinding); ok {
+		if action := provider.DisconnectAction(); action.ID != "" && action.Key != "" {
+			return action
+		}
+	}
+	return sdkui.Action{ID: "quit", Key: "Q", Label: "断开"}
+}
+
+func (r *Root) confirmActions() []sdkui.Action {
+	actions := append([]sdkui.Action(nil), leaveConfirmActions...)
+	for i := range actions {
+		if actions[i].ID == "quit" {
+			binding := r.disconnectAction()
+			binding.ID = "quit"
+			actions[i] = binding
+		}
+	}
+	checked := sdkui.CheckedActions("gateway.leave-confirm", actions)
+	if sdkui.ActionScopeInvalid(checked) {
+		return append(checked, sdkui.EscapeAction("返回"))
+	}
+	return checked
 }
 
 // setConfirmLeave 打开/关闭"离开确认"，并把少了一行的高度重新告诉游戏界面。
@@ -425,7 +460,11 @@ func (r *Root) leaveRoom() tea.Cmd {
 // gameMsg 把窗口尺寸减掉标题栏那一行再转给游戏界面。
 func (r *Root) gameMsg(msg tea.Msg) tea.Msg {
 	if size, ok := msg.(tea.WindowSizeMsg); ok {
-		h := size.Height - 1
+		extra := 1
+		if r.confirmLeave {
+			extra++
+		}
+		h := size.Height - extra
 		if h < 1 {
 			h = 1
 		}
@@ -632,7 +671,12 @@ func (r *Root) View() string {
 			if r.deps.Mode == sdkui.ColorNone {
 				warn = r.deps.Renderer.NewStyle().Bold(true)
 			}
-			out += "\n" + warn.Render("[ASK] 离开这局？  "+strings.Join(sdkui.ActionTokens(sdkui.SelectActions(leaveConfirmActions, "leave", "stay")), "  "))
+			actions := r.confirmActions()
+			prompt := "[ASK] 离开这局？  " + strings.Join(sdkui.ActionTokens(sdkui.SelectActions(actions, "leave", "stay")), "  ")
+			if len(actions) > 0 && sdkui.ActionScopeInvalid(actions[:1]) {
+				prompt = "[ASK] 按键配置冲突，请按 Esc 返回"
+			}
+			out += "\n" + warn.Render(prompt)
 		}
 		return out
 	}
@@ -641,7 +685,10 @@ func (r *Root) View() string {
 	if r.level == levelJoin {
 		body = r.joinView()
 	}
-	return r.header() + "\n" + body + "\n" + r.cmdLine()
+	view, last := sdkui.FrameViewport(r.header()+"\n"+body+"\n"+r.cmdLine(), r.width, r.height, r.frameOffset)
+	r.frameLast = last
+	r.frameOffset = min(r.frameOffset, last)
+	return view
 }
 
 // header 是 "TTYFish v0.1.9 | [USER] 名字 (—pt)·····Home" 那一行。

@@ -27,6 +27,7 @@ type State struct {
 	Removed        []Card   `json:"removed"`
 	Alive          []bool   `json:"alive"`
 	Turn           int      `json:"turn"`
+	Direction      int      `json:"direction"`
 	TurnsRemaining int      `json:"turns_remaining"`
 	UnderAttack    bool     `json:"under_attack"`
 	Phase          Phase    `json:"phase"`
@@ -57,16 +58,26 @@ type Effect struct {
 }
 
 func NewGame(seats int, seed int64) (*State, error) {
+	return NewGameWithReverse(seats, seed, false)
+}
+
+func NewGameWithReverse(seats int, seed int64, reverse bool) (*State, error) {
 	if seats < 2 || seats > 5 {
 		return nil, errors.New("exploding kittens requires 2 to 5 players")
 	}
 	s := &State{
 		Seed: seed, Hands: make([][]Card, seats), Alive: make([]bool, seats),
 		Future: make([][]Card, seats), TurnsRemaining: 1, Phase: Playing,
-		Winner: -1, DiscardBy: -1,
+		Winner: -1, DiscardBy: -1, Direction: 1,
 	}
 	var kittens, defuses, deck []Card
-	for _, card := range NewDeck() {
+	cards := NewDeck()
+	if reverse {
+		for i := 0; i < 4; i++ {
+			cards = append(cards, Card{ID: len(cards), Kind: Reverse})
+		}
+	}
+	for _, card := range cards {
 		switch card.Kind {
 		case ExplodingKitten:
 			kittens = append(kittens, card)
@@ -110,7 +121,11 @@ func (s *State) clearFuture() {
 
 func (s *State) nextSeat() int {
 	for step := 1; step <= len(s.Alive); step++ {
-		seat := (s.Turn + step) % len(s.Alive)
+		dir := s.Direction
+		if dir != -1 {
+			dir = 1
+		}
+		seat := (s.Turn + dir*step + len(s.Alive)) % len(s.Alive)
 		if s.Alive[seat] {
 			return seat
 		}

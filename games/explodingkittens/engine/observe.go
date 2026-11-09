@@ -4,6 +4,7 @@ type Observation struct {
 	Seat           int    `json:"seat"`
 	Phase          Phase  `json:"phase"`
 	Turn           int    `json:"turn"`
+	Direction      int    `json:"direction"`
 	TurnsRemaining int    `json:"turns_remaining"`
 	UnderAttack    bool   `json:"under_attack"`
 	Winner         int    `json:"winner"`
@@ -29,7 +30,7 @@ type Observation struct {
 // cards or secret reinsertion position. Returned slices do not alias State.
 func Observe(s *State, seat int) Observation {
 	o := Observation{
-		Seat: seat, Phase: s.Phase, Turn: s.Turn, TurnsRemaining: s.TurnsRemaining,
+		Seat: seat, Phase: s.Phase, Turn: s.Turn, Direction: s.Direction, TurnsRemaining: s.TurnsRemaining,
 		UnderAttack: s.UnderAttack, Winner: s.Winner,
 		Alive: append([]bool(nil), s.Alive...), HandCounts: make([]int, len(s.Hands)),
 		DeckCount: len(s.Deck), Discard: append([]Card(nil), s.Discard...),

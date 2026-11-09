@@ -92,6 +92,13 @@ func Apply(s *State, a Action) error {
 				text += "，" + oldPending.Kind.Name() + "效果已取消"
 			} else if oldPending != nil {
 				text += "，" + oldPending.Kind.Name() + "效果已生效"
+				if oldPending.Kind == Reverse {
+					if s.Direction == -1 {
+						text += "，方向向左"
+					} else {
+						text += "，方向向右"
+					}
+				}
 			}
 		}
 	}
@@ -191,7 +198,7 @@ func (s *State) play(a Action) error {
 	}
 	if len(cards) == 1 {
 		switch kind {
-		case Attack, Skip, Shuffle, SeeTheFuture, Favor:
+		case Attack, Skip, Reverse, Shuffle, SeeTheFuture, Favor:
 		default:
 			return ErrCard
 		}
@@ -280,6 +287,13 @@ func (s *State) resolve() {
 			s.TurnsRemaining = turns
 			s.UnderAttack = true
 		case Skip:
+			s.endTurn()
+		case Reverse:
+			if s.Direction == -1 {
+				s.Direction = 1
+			} else {
+				s.Direction = -1
+			}
 			s.endTurn()
 		case Shuffle:
 			s.shuffle()

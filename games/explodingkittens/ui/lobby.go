@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/x/ansi"
 	kittens "github.com/xingzitian/TTYFish/games/explodingkittens"
 	"github.com/xingzitian/TTYFish/sdk/client"
 	"github.com/xingzitian/TTYFish/sdk/ui"
@@ -45,6 +44,14 @@ func (m *Model) viewLobby() string {
 		title += "   你是房主"
 	}
 	lines := []string{m.turn().Render(title)}
+	dlc := "关闭"
+	for _, id := range m.snap.DLC {
+		if id == kittens.ReverseDLC {
+			dlc = "开启"
+			break
+		}
+	}
+	lines = append(lines, m.dim().Render("DLC 反转牌："+dlc))
 	if !compact {
 		lines = append(lines, "")
 	}
@@ -103,13 +110,5 @@ func (m *Model) viewLobby() string {
 		}
 	}
 	lines = append(lines, m.cmdLine(m.width))
-	for i := range lines {
-		// cmdLine may already contain wrapped rows.
-		rows := strings.Split(lines[i], "\n")
-		for j := range rows {
-			rows[j] = ansi.Truncate(rows[j], m.width, "")
-		}
-		lines[i] = strings.Join(rows, "\n")
-	}
 	return strings.Join(lines, "\n")
 }

@@ -28,6 +28,11 @@ func (m *Model) keyHelp() []ui.ActionGroup {
 	return []ui.ActionGroup{{Title: "出牌", Actions: play}, common, room, closeGroup}
 }
 
-func (m *Model) viewHelp() string {
+func (m *Model) helpContent() string {
 	return ui.RenderHelp(m.keyHelp(), m.width, "[KEY] 键位一览", ui.HelpCloseHint(ui.HelpActions(commonActions, "?", "q")), m.dim().Render, m.turn().Render)
+}
+
+func (m *Model) viewHelp() string {
+	view, _ := ui.HelpViewport(m.helpContent(), m.width, m.height, m.helpOffset)
+	return view
 }

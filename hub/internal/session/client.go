@@ -124,6 +124,22 @@ func (c *Client) Start() error {
 	return rm.Start(c.fp)
 }
 
+func (c *Client) SetDLC(id string, enabled bool) error {
+	rm, err := c.room()
+	if err != nil {
+		return err
+	}
+	return rm.SetDLC(c.fp, id, enabled)
+}
+
+func (c *Client) ToggleDLC(id string) error {
+	rm, err := c.room()
+	if err != nil {
+		return err
+	}
+	return rm.ToggleDLC(c.fp, id)
+}
+
 func (c *Client) AddBot() error {
 	rm, err := c.room()
 	if err != nil {

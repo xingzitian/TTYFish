@@ -123,6 +123,35 @@ func TestHelpFitsWidth(t *testing.T) {
 	}
 }
 
+func TestHelpCanScrollWhenTerminalIsShort(t *testing.T) {
+	for _, minimal := range []bool{false, true} {
+		m := playingState(minimal).modelWith(t)
+		m.width, m.height = 40, 4
+		m.handleKey(keyOf("?"))
+		if !strings.Contains(strip(m.View()), "翻看") {
+			t.Fatal("missing scroll indicator")
+		}
+		m.handleKey(tea.KeyMsg{Type: tea.KeyPgDown})
+		if m.helpOffset == 0 {
+			t.Fatal("page down did not advance")
+		}
+		m.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
+		if m.helpOffset != 0 {
+			t.Fatal("page up did not return to start")
+		}
+		for i := 0; i < 30; i++ {
+			m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+		}
+		if !strings.Contains(strip(m.View()), "关闭") {
+			t.Fatalf("cannot reach end of help:\n%s", strip(m.View()))
+		}
+		m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+		if m.help || m.helpOffset != 0 {
+			t.Fatal("escape did not close and reset help")
+		}
+	}
+}
+
 // TestHelpListedInCmd 帮助入口必须在 CMD 里可见，而且窄屏也留得住。
 func TestHelpListedInCmd(t *testing.T) {
 	for _, minimal := range []bool{false, true} {

@@ -39,6 +39,12 @@ type Modal interface {
 	HasModal() bool
 }
 
+// DisconnectBinding lets the host honour the same disconnect key displayed
+// by the active game. Games without this interface retain the platform default.
+type DisconnectBinding interface {
+	DisconnectAction() ui.Action
+}
+
 // Entry 将游戏标识、规则实现和界面工厂绑定在一起，由组装入口创建。
 type Entry struct {
 	ID    string

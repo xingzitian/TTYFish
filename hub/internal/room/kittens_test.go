@@ -1,12 +1,88 @@
 package room
 
 import (
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	kittens "github.com/xingzitian/TTYFish/games/explodingkittens"
 	"github.com/xingzitian/TTYFish/games/explodingkittens/engine"
 )
+
+func TestKittensDLCIsRoomScopedAndHostControlled(t *testing.T) {
+	r, _ := newTestRoom(t)
+	r.Game = kittens.Game{}
+	mustJoin(t, r, "alice", "Alice")
+	mustJoin(t, r, "bob", "Bob")
+	if err := r.SetDLC("bob", kittens.ReverseDLC, true); !errors.Is(err, ErrNotHost) {
+		t.Fatalf("non-host: %v", err)
+	}
+	if err := r.SetDLC("alice", "unknown", true); err == nil {
+		t.Fatal("unknown DLC accepted")
+	}
+	if err := r.SetDLC("alice", kittens.ReverseDLC, true); err != nil {
+		t.Fatal(err)
+	}
+	snap, _ := r.SnapshotFor("bob")
+	if len(snap.DLC) != 1 || snap.DLC[0] != kittens.ReverseDLC {
+		t.Fatalf("DLC not broadcast: %+v", snap.DLC)
+	}
+	mustStart(t, r, "alice")
+	if err := r.SetDLC("alice", kittens.ReverseDLC, false); !errors.Is(err, ErrPhase) {
+		t.Fatalf("in-game modification: %v", err)
+	}
+	s := r.state.(*engine.State)
+	count := 0
+	for _, c := range s.Deck {
+		if c.Kind == engine.Reverse {
+			count++
+		}
+	}
+	for _, hand := range s.Hands {
+		for _, c := range hand {
+			if c.Kind == engine.Reverse {
+				count++
+			}
+		}
+	}
+	if count != 4 {
+		t.Fatalf("DLC deck contains %d reverse cards", count)
+	}
+	other, _ := newTestRoom(t)
+	other.Game = kittens.Game{}
+	mustJoin(t, other, "carol", "Carol")
+	mustJoin(t, other, "dan", "Dan")
+	mustStart(t, other, "carol")
+	for _, c := range other.state.(*engine.State).Deck {
+		if c.Kind == engine.Reverse {
+			t.Fatal("DLC leaked to another room")
+		}
+	}
+}
+
+func TestConcurrentDLCTogglesAreAtomic(t *testing.T) {
+	r, _ := newTestRoom(t)
+	r.Game = kittens.Game{}
+	mustJoin(t, r, "alice", "Alice")
+	var wg sync.WaitGroup
+	errs := make(chan error, 20)
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); errs <- r.ToggleDLC("alice", kittens.ReverseDLC) }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap, err := r.SnapshotFor("alice")
+	if err != nil || len(snap.DLC) != 0 {
+		t.Fatalf("20 toggles must return to off: %v %v", snap.DLC, err)
+	}
+}
 
 func TestKittensResponseWindowAndDisconnectedFavorTarget(t *testing.T) {
 	r, clock := newTestRoom(t)
