@@ -19,6 +19,8 @@ type Observation struct {
 	// DiscardBy 是最后一张弃牌的出牌人，-1 表示还没有弃牌。
 	DiscardBy int    `json:"discard_by"`
 	Future    []Card `json:"future,omitempty"`
+	// SpectatorTop is available only to eliminated seated players during a match.
+	SpectatorTop []Card `json:"spectator_top,omitempty"`
 	// Public peek metadata identifies a resolved effect even if intermediate
 	// response snapshots were dropped. Card contents remain private.
 	PeekSeat int     `json:"peek_seat"`
@@ -26,8 +28,9 @@ type Observation struct {
 	Pending  *Effect `json:"pending,omitempty"`
 }
 
-// Observe never exposes the deck order, other hands, random seed, removed
-// cards or secret reinsertion position. Returned slices do not alias State.
+// Observe exposes the top of the deck only to an eliminated player; other
+// hands, random seed and secret reinsertion position remain private.
+// Returned slices do not alias State.
 func Observe(s *State, seat int) Observation {
 	o := Observation{
 		Seat: seat, Phase: s.Phase, Turn: s.Turn, Direction: s.Direction, TurnsRemaining: s.TurnsRemaining,
@@ -49,9 +52,11 @@ func Observe(s *State, seat int) Observation {
 			o.BombsLeft++
 		}
 	}
-	if seat >= 0 && seat < len(s.Hands) && s.Alive[seat] {
+	if seat >= 0 && seat < len(s.Hands) && seat < len(s.Alive) && s.Alive[seat] {
 		o.Hand = append([]Card(nil), s.Hands[seat]...)
 		o.Future = append([]Card(nil), s.Future[seat]...)
+	} else if seat >= 0 && seat < len(s.Hands) && seat < len(s.Alive) && !s.Alive[seat] && s.Phase != Finished {
+		o.SpectatorTop = append([]Card(nil), s.Deck[:min(3, len(s.Deck))]...)
 	}
 	if s.Pending != nil {
 		pending := *s.Pending

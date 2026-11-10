@@ -13,7 +13,7 @@ import (
 
 // View 是整帧入口：老板键 → 断线 → 帮助 → 极简/丰富。
 func (m *Model) View() string {
-	scope := fmt.Sprintf("%t/%t/%t/%t/%d/%v/%d/%d", m.boss, m.help, m.snap.Kicked, m.closed, m.snap.Phase, m.obs().Phase, m.step, m.opts.Layout)
+	scope := fmt.Sprintf("%t/%t/%t/%t/%d/%v/%d/%d/%t", m.boss, m.help, m.snap.Kicked, m.closed, m.snap.Phase, m.obs().Phase, m.step, m.opts.Layout, m.alive())
 	if scope != m.frameScope {
 		m.frameOffset, m.frameLast, m.frameScope = 0, 0, scope
 	}
@@ -103,7 +103,11 @@ func (m *Model) viewRich() string {
 	leftW := m.width - panelW - 2
 
 	left := []string{m.compactTurn(leftW), m.compactDeck(leftW)}
-	left = append(left, m.compactHand(leftW)...)
+	if m.alive() {
+		left = append(left, m.compactHand(leftW)...)
+	} else {
+		left = append(left, m.spectatorRows(leftW)...)
+	}
 	if m.showPlayers() {
 		left = append(left, m.compactPlayers(leftW)...)
 	}
@@ -144,6 +148,19 @@ func (m *Model) statusLine(width int) string {
 		return ansi.Hardwrap(m.warn().Render("[MSG] "+m.errMsg), max(1, width), true)
 	}
 	return ansi.Hardwrap(m.dim().Render("[MSG] ")+m.hint(), max(1, width), true)
+}
+
+// spectatorRows renders only the server-filtered spectator view, independently
+// of the temporary private See the Future display.
+func (m *Model) spectatorRows(width int) []string {
+	var tokens []string
+	for i, card := range m.obs().SpectatorTop {
+		tokens = append(tokens, fmt.Sprintf("%d.", i+1)+m.token(card.Kind))
+	}
+	if len(tokens) == 0 {
+		tokens = append(tokens, "（牌堆为空）")
+	}
+	return wrapTokens(tokens, m.dim().Render("[观战 牌堆顶] "), width)
 }
 
 // hint 按"阶段 + 选择进度"只说一件事。

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	kittens "github.com/xingzitian/TTYFish/games/explodingkittens"
@@ -162,5 +163,34 @@ func TestRemoteViewDispatchRetainsUNOAndRejectsUnknownGame(t *testing.T) {
 	raw, _ := json.Marshal(wire)
 	if _, ok := decodeGameView("uno", raw, 0).(unoengine.Observation); !ok {
 		t.Fatal("UNO decoding broken")
+	}
+}
+
+func TestKittensSpectatorViewRoundTripsToRemoteClient(t *testing.T) {
+	s, err := engine.NewGame(3, 123)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Alive[0] = false
+	s.Deck = []engine.Card{{ID: 900, Kind: engine.ExplodingKitten}, {ID: 901, Kind: engine.Skip}}
+	for _, seat := range []int{0, 1} {
+		view, err := (kitprotocol.Codec{}).EncodeView(engine.Observe(s, seat))
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(view)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, ok := decodeGameView(kittens.ID, raw, seat).(engine.Observation)
+		if !ok {
+			t.Fatal("remote failed to decode spectator observation")
+		}
+		if seat == 0 && (len(decoded.SpectatorTop) != 2 || decoded.SpectatorTop[0].Kind != engine.ExplodingKitten) {
+			t.Fatalf("spectator view lost: %+v", decoded)
+		}
+		if seat == 1 && (len(decoded.SpectatorTop) != 0 || strings.Contains(string(raw), "spectator_top")) {
+			t.Fatalf("live player received spectator data: %s", raw)
+		}
 	}
 }

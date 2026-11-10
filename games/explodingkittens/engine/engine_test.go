@@ -7,6 +7,38 @@ import (
 	"testing"
 )
 
+func TestEliminatedSpectatorSeesOnlyLiveTopCards(t *testing.T) {
+	s := testGame([]Kind{Skip}, []Kind{Attack}, []Kind{TacoCat})
+	s.Alive[0] = false
+	s.Deck = []Card{{ID: 1, Kind: ExplodingKitten}, {ID: 2, Kind: Skip}, {ID: 3, Kind: Attack}, {ID: 4, Kind: Nope}}
+	view := Observe(s, 0)
+	if !reflect.DeepEqual(view.SpectatorTop, s.Deck[:3]) || len(view.Hand) != 0 || len(view.Future) != 0 {
+		t.Fatalf("spectator view: %+v", view)
+	}
+	view.SpectatorTop[0].Kind = Nope
+	if s.Deck[0].Kind != ExplodingKitten {
+		t.Fatal("spectator view aliases deck")
+	}
+	for _, seat := range []int{-1, 1, 2, 3} {
+		if got := Observe(s, seat).SpectatorTop; len(got) != 0 {
+			t.Fatalf("seat %d received deck: %v", seat, got)
+		}
+	}
+	s.Deck = s.Deck[2:]
+	if got := Observe(s, 0).SpectatorTop; !reflect.DeepEqual(got, s.Deck) {
+		t.Fatalf("short changed deck: %v", got)
+	}
+	s.Deck = nil
+	if got := Observe(s, 0).SpectatorTop; len(got) != 0 {
+		t.Fatalf("empty deck: %v", got)
+	}
+	s.Deck = []Card{{ID: 5, Kind: Skip}}
+	s.Phase = Finished
+	if got := Observe(s, 0).SpectatorTop; len(got) != 0 {
+		t.Fatalf("finished match exposes deck: %v", got)
+	}
+}
+
 func TestReverseDLCDeckAndTurnRules(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		s, err := NewGameWithReverse(3, 42, enabled)

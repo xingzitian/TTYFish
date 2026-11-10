@@ -15,7 +15,11 @@ func (m *Model) viewCompact() string {
 		m.compactTurn(width),
 		m.compactDeck(width),
 	}
-	lines = append(lines, m.compactHand(width)...)
+	if m.alive() {
+		lines = append(lines, m.compactHand(width)...)
+	} else {
+		lines = append(lines, m.spectatorRows(width)...)
+	}
 	if m.showPlayers() {
 		lines = append(lines, m.compactPlayers(width)...)
 	}

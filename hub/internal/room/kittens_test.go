@@ -135,6 +135,58 @@ func TestKittensResponseWindowAndDisconnectedFavorTarget(t *testing.T) {
 	}
 }
 
+func TestKittensEliminatedSpectatorSnapshotIsPrivate(t *testing.T) {
+	r, _ := newTestRoom(t)
+	r.Game = kittens.Game{}
+	mustJoin(t, r, "alice", "Alice")
+	mustJoin(t, r, "bob", "Bob")
+	mustJoin(t, r, "carol", "Carol")
+	mustStart(t, r, "alice")
+	s := r.state.(*engine.State)
+	s.Hands[0] = nil
+	s.Deck = []engine.Card{{ID: 100, Kind: engine.ExplodingKitten}, {ID: 101, Kind: engine.Skip}, {ID: 102, Kind: engine.Attack}, {ID: 103, Kind: engine.Nope}}
+	if err := r.Act("alice", engine.Action{Type: engine.Draw, Seat: 0}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		want int
+	}{{"alice", 3}, {"bob", 0}, {"carol", 0}} {
+		snap, err := r.SnapshotFor(tc.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		view := snap.View.(engine.Observation)
+		if len(view.SpectatorTop) != tc.want {
+			t.Fatalf("%s sees %v", tc.name, view.SpectatorTop)
+		}
+		if tc.want > 0 && view.SpectatorTop[0].Kind != engine.Skip {
+			t.Fatalf("wrong deck top: %v", view.SpectatorTop)
+		}
+	}
+	if err := r.Act("bob", engine.Action{Type: engine.Draw, Seat: 1}); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := r.SnapshotFor("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if top := snap.View.(engine.Observation).SpectatorTop; len(top) != 2 || top[0].Kind != engine.Attack {
+		t.Fatalf("top not refreshed: %v", top)
+	}
+	r.Disconnect("alice")
+	if _, err := r.Join("alice", "Alice"); err != nil {
+		t.Fatalf("spectator reconnect: %v", err)
+	}
+	snap, err = r.SnapshotFor("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if top := snap.View.(engine.Observation).SpectatorTop; len(top) != 2 || top[0].Kind != engine.Attack {
+		t.Fatalf("spectator view lost on reconnect: %v", top)
+	}
+}
+
 func TestKittensEliminationFinishAndRestart(t *testing.T) {
 	r, _ := newTestRoom(t)
 	r.Game = kittens.Game{}

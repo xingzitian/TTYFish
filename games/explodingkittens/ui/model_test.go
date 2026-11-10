@@ -67,6 +67,65 @@ func TestLobbyReverseDLCToggleAndDirection(t *testing.T) {
 	}
 }
 
+func TestEliminatedSpectatorShowsCurrentTopCards(t *testing.T) {
+	for _, layout := range []ui.Layout{ui.LayoutCompact, ui.LayoutRich} {
+		o := playingObs()
+		o.Alive[0] = false
+		o.SpectatorTop = []engine.Card{{ID: 1, Kind: engine.ExplodingKitten}, {ID: 2, Kind: engine.Skip}, {ID: 3, Kind: engine.Attack}}
+		m, c := newTestModel(t, o, client.Playing)
+		m.opts.Layout, m.width, m.height = layout, 120, 24
+		view := strip(m.View())
+		for _, want := range []string{"观战", "爆炸猫", "跳过", "攻击"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("layout=%v missing %s: %s", layout, want, view)
+			}
+		}
+		o.SpectatorTop = []engine.Card{{ID: 4, Kind: engine.Shuffle}}
+		c.snap.View = o
+		m.Update(client.SnapshotMsg(c.snap))
+		view = strip(m.View())
+		if !strings.Contains(view, "洗牌") || strings.Contains(view, "爆炸猫") {
+			t.Fatalf("spectator view was not refreshed: %s", view)
+		}
+		press(m, "1")
+		if c.acted != 0 {
+			t.Fatal("spectator action was sent")
+		}
+	}
+}
+
+func TestEliminationResetsScrolledViewAndShowsCards(t *testing.T) {
+	o := playingObs(engine.Card{ID: 1, Kind: engine.Skip})
+	m, c := newTestModel(t, o, client.Playing)
+	m.width, m.height = 40, 2
+	m.View()
+	for i := 0; i < 30; i++ {
+		m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlDown})
+		m.View()
+	}
+	if m.frameOffset == 0 {
+		t.Fatal("expected scrolled playing view")
+	}
+	o.Alive[0] = false
+	o.SpectatorTop = []engine.Card{{Kind: engine.ExplodingKitten}, {Kind: engine.Skip}, {Kind: engine.Attack}}
+	c.snap.View = o
+	m.Update(client.SnapshotMsg(c.snap))
+	m.View()
+	if m.frameOffset != 0 {
+		t.Fatal("elimination kept old scroll offset")
+	}
+	var seen strings.Builder
+	for i := 0; i < 40; i++ {
+		seen.WriteString(strip(m.View()))
+		m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	}
+	for _, label := range []string{"爆炸猫", "跳过", "攻击"} {
+		if !strings.Contains(seen.String(), label) {
+			t.Fatalf("spectator card %s unreachable: %s", label, seen.String())
+		}
+	}
+}
+
 func (c *fakeClient) Snapshot() client.Snapshot       { return c.snap }
 func (c *fakeClient) Updates() <-chan client.Snapshot { return nil }
 func (c *fakeClient) Act(a any) error {
